@@ -108,9 +108,14 @@ openssl rand -hex 32
 PowerShell:
 
 ```powershell
-$bytes = New-Object byte[] 32
-[Security.Cryptography.RandomNumberGenerator]::Fill($bytes)
-[Convert]::ToHexString($bytes).ToLower()
+function New-RandomHex {
+    param([int]$Bytes = 32)
+    $b = New-Object byte[] $Bytes
+    $rng = [System.Security.Cryptography.RandomNumberGenerator]::Create()
+    try { $rng.GetBytes($b) } finally { $rng.Dispose() }
+    -join ($b | ForEach-Object { $_.ToString("x2") })
+}
+New-RandomHex
 ```
 
 Put the result in:
