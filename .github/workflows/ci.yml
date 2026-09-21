@@ -1,0 +1,40 @@
+name: Clean Install CI
+
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  static:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Python syntax
+        run: |
+          python -m py_compile scripts/*.py
+
+      - name: Repository static checks
+        run: |
+          python scripts/static_check.py
+
+      - name: Set up Deno
+        uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+
+      - name: Check Edge Functions
+        run: |
+          deno check supabase/functions/firewatch-firms/index.ts
+          deno check supabase/functions/firewatch-telegram/index.ts
+          deno check supabase/functions/firewatch-setup/index.ts
+          deno check supabase/functions/firewatch-doctor/index.ts
