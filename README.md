@@ -1,10 +1,10 @@
 # FIRMSGeoTools
 
-Community-ready deployment of a cloud fire / thermal anomaly monitoring system built around NASA FIRMS, Supabase and Telegram.
+Community-ready deployment of a cloud fire / thermal-anomaly monitoring system built around NASA FIRMS, Supabase and Telegram.
 
-The project is derived from a production system, but this repository is intentionally **clean-install only**:
+This repository is a **clean-install extraction** of an already tested production system. It intentionally contains:
 
-- no production project IDs;
+- no production Supabase project IDs;
 - no Telegram chat IDs;
 - no API keys;
 - no private URLs;
@@ -13,61 +13,75 @@ The project is derived from a production system, but this repository is intentio
 
 Users provide their own credentials and monitoring geography.
 
-## What you get
+## Current status
 
-### Core profile
+**Clean Install Core: Stage 2 / pre-release**
 
-- NASA FIRMS VIIRS NOAA-20 / NOAA-21 / Suomi NPP;
-- NASA FIRMS MODIS Terra/Aqua;
-- configurable monitoring area;
-- event clustering / deduplication;
-- Telegram notifications;
+Already implemented in the public clean install:
+
+- configurable AOI from GeoJSON;
+- optional regions / ADM1 from GeoJSON;
+- automatic FIRMS bbox derived from AOI;
+- NOAA-20 / NOAA-21 / Suomi NPP VIIRS;
+- Terra/Aqua MODIS;
+- deterministic detection deduplication;
+- spatial event clustering;
+- bootstrap-safe first import;
+- Telegram notification delivery;
+- persistent Telegram delivery state and lease;
+- event lifecycle refresh;
+- parameterized pg_cron;
+- Windows PowerShell installer;
+- Linux/macOS installer.
+
+Still being ported from the private production system:
+
 - admin bot;
-- source coverage and notification integrity;
-- search by event ID, filters, coordinate + radius;
+- search / analytics;
+- source coverage;
+- notification integrity;
+- geographic integrity audit;
 - Web Dashboard;
-- geographic integrity audit.
+- event timeline;
+- optional EUMETSAT / Sentinel / CAMS / OSINT modules.
 
-### Full profile
-
-Everything in Core, plus optional integrations for:
-
-- EUMETSAT LSA SAF;
-- Sentinel-3 SLSTR;
-- Sentinel-2 surface evidence;
-- CAMS;
-- Sentinel-5P;
-- OSINT / geo context;
-- ground environmental context;
-- evidence reports.
+Do **not** treat the current branch as a stable production release until the fresh-project acceptance test is complete.
 
 ## Deployment model
 
 ```text
-NASA FIRMS / optional sources
-          │
-          ▼
- Supabase Edge Functions
-          │
-          ▼
- PostgreSQL + PostGIS
-          │
-     ┌────┴────┐
-     ▼         ▼
- Telegram   Web Dashboard
+NASA FIRMS
+    │
+    ▼
+firewatch-firms
+    │
+    ▼
+PostgreSQL + PostGIS
+    │
+    ├── detections
+    ├── clustered events
+    └── lifecycle / notification state
+              │
+              ▼
+      firewatch-telegram
+              │
+              ▼
+           Telegram
 ```
 
 ## Quick start
 
-1. Create a Supabase project.
-2. Create a Telegram bot and destination channel.
+1. Create a new Supabase project.
+2. Create a Telegram bot and destination channel/group.
 3. Obtain a NASA FIRMS MAP_KEY.
 4. Clone this repository.
-5. Copy `.env.example` to your local secret file.
-6. Configure your monitoring geography.
-7. Follow [docs/INSTALL.md](docs/INSTALL.md).
+5. Copy `.env.example` to `.env.local`.
+6. Copy `config/aoi.example.geojson` to `config/aoi.geojson` and edit it.
+7. Copy `config/monitoring.example.json` to `config/monitoring.json`.
+8. Optional: provide `config/regions.geojson`.
+9. Follow [docs/INSTALL.md](docs/INSTALL.md).
 
-Do **not** commit your secret file.
+Never commit `.env.local`, your actual AOI/region configuration if private, or any secret.
 
 ## Documentation
 
@@ -75,11 +89,7 @@ Do **not** commit your secret file.
 - [Keys and secrets](docs/KEYS_AND_SECRETS.md)
 - [Geography setup](docs/GEO_SETUP.md)
 - [Architecture](docs/ARCHITECTURE.md)
+- [Clean Core](docs/CLEAN_CORE.md)
+- [Stage 2](docs/STAGE2.md)
 - [Security](docs/SECURITY.md)
 - [Validation](docs/VALIDATION.md)
-
-## Project status
-
-The public clean-install packaging is being extracted from an already tested production deployment.
-
-The installer is being built in stages. Do not use this repository for production until the README marks the current release as **stable**.
