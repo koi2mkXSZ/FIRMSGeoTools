@@ -15,7 +15,7 @@ Users provide their own credentials and monitoring geography.
 
 ## Current status
 
-**Clean Install Core: Stage 8 acceptance / pre-release**
+**FIRMSGeoTools Core v1.0.0 — Stable**
 
 Already implemented in the public clean install:
 
@@ -55,7 +55,7 @@ Still being ported from the private production system:
 - event timeline;
 - optional EUMETSAT / Sentinel / CAMS / OSINT modules.
 
-Do **not** treat the current branch as a stable production release until the fresh-project acceptance test is complete.
+Stage 8 fresh-project acceptance has passed. `v1.0.0` is the first stable Core release.
 
 ## Deployment model
 
