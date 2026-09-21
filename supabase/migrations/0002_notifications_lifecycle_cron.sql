@@ -170,10 +170,16 @@ as $$
 declare
   j record;
   v_url text:=rtrim(p_base_url,'/');
+  v_poll integer;
+  v_firms_schedule text;
 begin
   if v_url !~ '^https://[a-z0-9-]+[.]supabase[.]co$' then
     raise exception 'Invalid Supabase base URL';
   end if;
+
+  select poll_interval_minutes into v_poll from public.project_config where id=true;
+  v_poll:=greatest(5,least(coalesce(v_poll,15),60));
+  v_firms_schedule:=case when v_poll=60 then '0 * * * *' else format('*/%s * * * *',v_poll) end;
 
   for j in select jobid from cron.job where jobname in(
     'firmsgeotools-firms','firmsgeotools-telegram','firmsgeotools-lifecycle'
@@ -182,7 +188,7 @@ begin
   end loop;
 
   perform cron.schedule(
-    'firmsgeotools-firms','5,20,35,50 * * * *',
+    'firmsgeotools-firms',v_firms_schedule,
     format($cmd$
       select net.http_post(
         url := %L,
@@ -219,7 +225,7 @@ begin
   insert into public.system_state(key,value,updated_at)
   values('core_cron',jsonb_build_object(
     'configured',true,'configured_at',now(),'base_url',v_url,
-    'firms','5,20,35,50 * * * *',
+    'firms',v_firms_schedule,
     'telegram','1,11,16,26,31,41,46,56 * * * *',
     'lifecycle','9,24,39,54 * * * *'
   ),now())
