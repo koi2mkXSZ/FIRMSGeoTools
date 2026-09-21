@@ -48,7 +48,11 @@ The protected `firewatch-doctor` endpoint checks:
 - detections outside AOI;
 - orphan detections;
 - NASA FIRMS Area API response for every enabled source;
-- Telegram bot identity and destination access.
+- Telegram bot identity and destination access;
+- Notification Integrity gaps/backlog;
+- Source Coverage health;
+- source baseline state;
+- independent FIRMS API → AOI → DB Geographic Integrity.
 
 No secret values are returned.
 
