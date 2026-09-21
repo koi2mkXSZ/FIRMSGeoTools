@@ -23,6 +23,8 @@ if config_path and config_path.exists():
         payload["telegram_enabled"]=bool(cfg["telegram"].get("enabled",True))
     if isinstance(cfg.get("dashboard"),dict):
         payload["dashboard_enabled"]=bool(cfg["dashboard"].get("enabled",True))
+        if cfg["dashboard"].get("public_url"):
+            payload["dashboard_public_url"]=str(cfg["dashboard"]["public_url"])
     if isinstance(cfg.get("sources"),dict):
         payload["sources"]=cfg["sources"]
     if isinstance(cfg.get("event_match_radius_m"),dict):
