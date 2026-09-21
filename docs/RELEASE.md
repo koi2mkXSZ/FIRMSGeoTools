@@ -3,9 +3,9 @@
 ## Current release
 
 ```text
-0.7.0-pre
-schema_version = 7
-channel = pre-release
+1.0.0
+schema_version = 9
+channel = stable
 ```
 
 ## Release checks
@@ -21,7 +21,7 @@ GitHub Actions must be green.
 
 ## Stable v1.0 acceptance gate
 
-Do not publish `v1.0.0` until Stage 8 passes on a brand-new Supabase project using only the public repository and documented credentials.
+Stage 8 passed on a brand-new Supabase project using only the public repository and documented credentials.
 
 Required acceptance conditions:
 
