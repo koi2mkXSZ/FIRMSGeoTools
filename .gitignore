@@ -1,0 +1,12 @@
+.env
+.env.*
+!.env.example
+secrets.*
+*.dump
+*.sql.gz
+*.backup
+.DS_Store
+.vscode/
+.idea/
+node_modules/
+supabase/.temp/
