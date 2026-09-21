@@ -36,8 +36,8 @@ if str(schema) not in text:
     fail("latest schema migration does not contain schema_version")
 
 readme=(ROOT/"README.md").read_text(encoding="utf-8")
-if "Stage 7" not in readme:
-    fail("README does not identify Stage 7")
+if "Stage 8" not in readme:
+    fail("README does not identify Stage 8")
 
 if errors:
     print("RELEASE CHECK FAILED")
