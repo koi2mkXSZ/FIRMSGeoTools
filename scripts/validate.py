@@ -133,7 +133,15 @@ def main():
     if report.get("status")=="fail":
         return 2
     if args.strict and report.get("status")=="warn":
-        return 1
+        warnings=[x for x in report.get("checks",[]) if x.get("status")=="warn"]
+        expected_learning=(
+            warnings
+            and all(x.get("id")=="source_baseline" for x in warnings)
+            and str((report.get("integrity") or {}).get("source_baseline",{}).get("status",""))=="learning"
+        )
+        if not expected_learning:
+            return 1
+        print("Strict acceptance: baseline learning is expected on a fresh installation.")
     return 0
 
 if __name__=="__main__":
