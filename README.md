@@ -15,7 +15,7 @@ Users provide their own credentials and monitoring geography.
 
 ## Current status
 
-**Clean Install Core: Stage 7 / pre-release**
+**Clean Install Core: Stage 8 acceptance / pre-release**
 
 Already implemented in the public clean install:
 
@@ -42,7 +42,7 @@ Already implemented in the public clean install:
 - Notification Integrity;
 - Source Coverage and robust source baseline;
 - independent geographic integrity audit;
-- self-hosted read-only Web Dashboard with signed temporary access;
+- static read-only Web Dashboard with signed Supabase API access;
 - portable recovery bundle;
 - upgrade and backup workflows;
 - release manifest and changelog;
@@ -106,6 +106,7 @@ Never commit `.env.local`, your actual AOI/region configuration if private, or a
 - [Stage 5](docs/STAGE5.md)
 - [Stage 6](docs/STAGE6.md)
 - [Stage 7](docs/STAGE7.md)
+- [Stage 8](docs/STAGE8.md)
 - [Security](docs/SECURITY.md)
 - [Validation](docs/VALIDATION.md)
 - [Recovery](docs/RECOVERY.md)
