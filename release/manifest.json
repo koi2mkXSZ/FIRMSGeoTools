@@ -1,7 +1,7 @@
 {
   "name": "FIRMSGeoTools",
-  "version": "0.7.0-pre",
-  "schema_version": 7,
+  "version": "0.8.0-pre",
+  "schema_version": 8,
   "channel": "pre-release",
   "profile": "core",
   "migrations": [
@@ -11,7 +11,8 @@
     "0004_admin_search_analytics.sql",
     "0005_integrity_coverage.sql",
     "0006_dashboard.sql",
-    "0007_release_recovery.sql"
+    "0007_release_recovery.sql",
+    "0008_dashboard_static_host.sql"
   ],
   "edge_functions": [
     "firewatch-firms",
