@@ -1,146 +1,228 @@
-# Installation
+# Installation — Core pre-release
 
-This guide describes a clean install into a new Supabase project.
+This guide installs the current FIRMSGeoTools Core into a **new Supabase project**.
 
-> Current packaging status: installer scaffolding. Production code is being parameterized before the first stable release.
+> Current status: pre-release. A full fresh-project acceptance test is still required before the repository is marked stable.
 
 ## 1. Requirements
 
 You need:
 
-- GitHub account;
+- Git;
+- Python 3;
+- Supabase CLI;
 - Supabase account;
 - Telegram account;
-- NASA FIRMS MAP_KEY;
-- Git;
-- Supabase CLI for CLI-based installation.
+- NASA FIRMS MAP_KEY.
 
-Optional Full-profile integrations require additional credentials.
+Linux/macOS also needs `curl`.
 
-## 2. Create Supabase project
-
-Create a new Supabase project and save:
-
-- project reference;
-- database password;
-- personal access token for Supabase CLI.
-
-Do not publish these values.
-
-Required PostgreSQL extensions will be enabled by migrations:
-
-- PostGIS;
-- pg_cron;
-- pg_net;
-- http;
-- Vault;
-- pgcrypto;
-- uuid-ossp.
-
-## 3. NASA FIRMS MAP_KEY
-
-Obtain a MAP_KEY from NASA FIRMS.
-
-Add it as a Supabase Edge Function secret:
+## 2. Clone and prepare files
 
 ```bash
-supabase secrets set FIRMS_MAP_KEY="..."
+git clone https://github.com/koi2mkXSZ/FIRMSGeoTools.git
+cd FIRMSGeoTools
 ```
 
-See [KEYS_AND_SECRETS.md](KEYS_AND_SECRETS.md).
+Create local configuration files:
 
-## 4. Telegram
+Linux/macOS:
 
-Create a bot using BotFather.
+```bash
+cp .env.example .env.local
+cp config/aoi.example.geojson config/aoi.geojson
+cp config/monitoring.example.json config/monitoring.json
+```
 
-Add the bot to your channel/group with permission to publish messages.
+PowerShell:
+
+```powershell
+Copy-Item .env.example .env.local
+Copy-Item config/aoi.example.geojson config/aoi.geojson
+Copy-Item config/monitoring.example.json config/monitoring.json
+```
+
+The real files are ignored by Git.
+
+## 3. Create Supabase project
+
+Create an empty Supabase project.
+
+Copy its project reference. Example:
+
+```text
+https://abcdefghijklmnop.supabase.co
+        ^^^^^^^^^^^^^^^^
+        project reference
+```
+
+Put only the project reference into:
+
+```text
+SUPABASE_PROJECT_REF=
+```
+
+in `.env.local`.
+
+The installer uses your Supabase CLI login for database deployment. It does not require the service-role key in `.env.local`.
+
+## 4. Get NASA FIRMS MAP_KEY
+
+Request your MAP_KEY from NASA FIRMS API.
 
 Set:
 
-```bash
-supabase secrets set TELEGRAM_BOT_TOKEN="..."
-supabase secrets set TELEGRAM_CHAT_ID="..."
+```text
+FIRMS_MAP_KEY=
 ```
 
-The admin chat is configured separately so the public channel ID does not need to equal the administrator ID.
+The installer stores it as a Supabase Edge Function secret.
 
-## 5. Configure geography
+## 5. Create Telegram bot
 
-Copy:
+Using BotFather:
+
+1. create a bot;
+2. copy the bot token;
+3. add the bot to the destination channel/group;
+4. grant permission to publish messages;
+5. determine the destination chat/channel ID.
+
+Set:
 
 ```text
-config/monitoring.example.json -> config/monitoring.json
-config/aoi.example.geojson    -> config/aoi.geojson
+TELEGRAM_BOT_TOKEN=
+TELEGRAM_CHAT_ID=
 ```
 
-Edit the geometry to your monitoring area.
+## 6. Generate INSTALL_TOKEN
+
+This protects the setup endpoint during installation.
+
+Linux/macOS:
+
+```bash
+openssl rand -hex 32
+```
+
+PowerShell:
+
+```powershell
+$bytes = New-Object byte[] 32
+[Security.Cryptography.RandomNumberGenerator]::Fill($bytes)
+[Convert]::ToHexString($bytes).ToLower()
+```
+
+Put the result in:
+
+```text
+INSTALL_TOKEN=
+```
+
+A separate cron secret is generated automatically inside Supabase Vault. You do not need to create or copy it.
+
+## 7. Configure monitoring area
+
+Edit:
+
+```text
+config/aoi.geojson
+```
+
+The AOI must be WGS84 / EPSG:4326 Polygon or MultiPolygon geometry.
+
+For per-region statistics later, optionally provide:
+
+```text
+config/regions.geojson
+```
+
+and set:
+
+```text
+REGIONS_FILE=config/regions.geojson
+```
 
 See [GEO_SETUP.md](GEO_SETUP.md).
 
-## 6. Link Supabase CLI
+## 8. Configure monitoring
+
+Edit:
+
+```text
+config/monitoring.json
+```
+
+Important values:
+
+- `project_name`;
+- `timezone`;
+- `poll_interval_minutes`;
+- `event_match_hours`;
+- `bootstrap_fresh_hours`;
+- enabled FIRMS sources;
+- VIIRS/MODIS event matching radii;
+- lifecycle inactivity/close windows.
+
+## 9. Login to Supabase CLI
 
 ```bash
 supabase login
-supabase link --project-ref YOUR_PROJECT_REF
 ```
 
-## 7. Install secrets
+## 10. Run installer
 
-Copy `.env.example` to a private local file and fill only the modules you use.
-
-Never commit that file.
-
-Core profile requires:
-
-- FIRMS_MAP_KEY
-- TELEGRAM_BOT_TOKEN
-- TELEGRAM_CHAT_ID
-- FIREWATCH_CRON_SECRET
-- TELEGRAM_ADMIN_WEBHOOK_SECRET
-
-## 8. Apply database migrations
-
-Stable release command will be:
+Linux/macOS:
 
 ```bash
-supabase db push
+bash scripts/install.sh .env.local
 ```
 
-The clean-install migration set will create all required tables, RPCs, RLS rules, Storage buckets and cron jobs.
-
-## 9. Deploy Edge Functions
-
-Stable release will provide:
-
-```bash
-./scripts/deploy.sh core
-```
-
-and PowerShell equivalent:
+Windows PowerShell:
 
 ```powershell
-./scripts/deploy.ps1 -Profile core
+.\scripts\install.ps1 -EnvFile .env.local
 ```
 
-## 10. Bootstrap admin bot
+The installer:
 
-The installer will register the Telegram webhook and pair the administrator.
+1. links the Supabase project;
+2. applies migrations;
+3. installs Edge secrets;
+4. deploys Core Edge Functions;
+5. uploads AOI/regions;
+6. configures cron using the project's own Supabase URL.
 
-## 11. Validate
+## 11. Bootstrap behavior
 
-Run the supplied validation script and verify:
+The first scheduled FIRMS run imports the normal recent upstream window, but old records are not published to Telegram.
 
-- FIRMS fetch succeeds;
-- AOI classification succeeds;
-- at least one cron run is recorded;
-- Telegram bot can send a test message;
-- source coverage is healthy;
-- geographic integrity has no missing records.
+Only events newer than `bootstrap_fresh_hours` are marked for initial delivery.
 
-See [VALIDATION.md](VALIDATION.md).
+Default: **3 hours**.
 
-## 12. Upgrade to Full profile
+After the first successful FIRMS run, bootstrap is complete and later new events are delivered normally.
 
-Optional sources can be enabled later without reinstalling Core.
+## 12. Core cron
 
-The Full profile will document each extra credential separately.
+FIRMS polling uses `poll_interval_minutes` from `config/monitoring.json`.
+
+Telegram queue draining currently runs several times per hour.
+
+Lifecycle refresh runs several times per hour.
+
+No Supabase project URL is hard-coded in repository SQL.
+
+## 13. Next validation
+
+Automated acceptance scripts are the next packaging stage.
+
+Until that stage is complete, verify the deployment from the Supabase dashboard:
+
+- migrations succeeded;
+- the three Edge Functions are deployed;
+- AOI exists in `monitoring_areas`;
+- `core_cron` exists in `system_state`;
+- after the first FIRMS run, `bootstrap.done=true`;
+- `monitor_firms.last_success_run` updates;
+- Telegram receives only fresh new events.
