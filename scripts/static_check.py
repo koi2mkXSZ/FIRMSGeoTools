@@ -71,3 +71,15 @@ if errors:
     for e in errors: print(" -",e)
     sys.exit(1)
 print("STATIC CHECK PASS")
+
+
+# SQL delimiter sanity discovered during Stage 8 fresh-install.
+for p in sorted((ROOT/"supabase/migrations").glob("*.sql")):
+    text=p.read_text(encoding="utf-8")
+    rel=str(p.relative_to(ROOT))
+    for lineno,line in enumerate(text.splitlines(),1):
+        stripped=line.strip()
+        if stripped=="as $" or stripped=="end $;":
+            fail(f"{rel}:{lineno}: broken PostgreSQL dollar-quote delimiter")
+    if text.count("$$") % 2 != 0:
+        fail(f"{rel}: odd number of $$ delimiters")
