@@ -50,6 +50,7 @@ required=[
     "supabase/migrations/0004_admin_search_analytics.sql",
     "supabase/migrations/0005_integrity_coverage.sql",
     "supabase/migrations/0006_dashboard.sql",
+    "supabase/migrations/0007_release_recovery.sql",
     "supabase/functions/firewatch-firms/index.ts",
     "supabase/functions/firewatch-telegram/index.ts",
     "supabase/functions/firewatch-setup/index.ts",
@@ -57,7 +58,10 @@ required=[
     "supabase/functions/firewatch-admin/index.ts",
     "supabase/functions/firewatch-geo-integrity/index.ts",
     "supabase/functions/firewatch-dashboard/index.ts",
-    "scripts/install.sh","scripts/install.ps1","scripts/validate.py"
+    "scripts/install.sh","scripts/install.ps1","scripts/validate.py",
+    "scripts/recovery.py","scripts/upgrade.sh","scripts/upgrade.ps1",
+    "scripts/backup.sh","scripts/backup.ps1","scripts/release_check.py",
+    "VERSION","release/manifest.json","CHANGELOG.md","LICENSE","CONTRIBUTING.md"
 ]
 for rel in required:
     if not (ROOT/rel).exists(): fail(f"missing required file: {rel}")
