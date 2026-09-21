@@ -25,6 +25,25 @@ Deno.serve(async(req)=>{
       if(error)throw error;
     }
 
+    if(body.sources && typeof body.sources==="object"){
+      for(const [sourceId,enabled] of Object.entries(body.sources)){
+        const {error}=await sb.from("firms_sources").update({enabled:Boolean(enabled)}).eq("source_id",sourceId);
+        if(error)throw error;
+      }
+    }
+    if(body.event_match_radius_m && typeof body.event_match_radius_m==="object"){
+      const viirs=Number(body.event_match_radius_m.VIIRS);
+      const modis=Number(body.event_match_radius_m.MODIS);
+      if(Number.isFinite(viirs)&&viirs>0){
+        const {error}=await sb.from("firms_sources").update({match_radius_m:Math.round(viirs)}).like("source_id","VIIRS_%");
+        if(error)throw error;
+      }
+      if(Number.isFinite(modis)&&modis>0){
+        const {error}=await sb.from("firms_sources").update({match_radius_m:Math.round(modis)}).eq("source_id","MODIS_NRT");
+        if(error)throw error;
+      }
+    }
+
     const {data:geo,error:ge}=await sb.rpc("firewatch_set_geography",{p_aoi:body.aoi,p_regions:body.regions??null});
     if(ge)throw ge;
 
