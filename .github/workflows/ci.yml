@@ -39,3 +39,4 @@ jobs:
           deno check --config supabase/functions/firewatch-setup/deno.json supabase/functions/firewatch-setup/index.ts
           deno check --config supabase/functions/firewatch-doctor/deno.json supabase/functions/firewatch-doctor/index.ts
           deno check --config supabase/functions/firewatch-admin/deno.json supabase/functions/firewatch-admin/index.ts
+          deno check --config supabase/functions/firewatch-geo-integrity/deno.json supabase/functions/firewatch-geo-integrity/index.ts
