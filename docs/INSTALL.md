@@ -260,3 +260,31 @@ or:
 ```powershell
 .\scripts\validate.ps1 -EnvFile .env.local -TelegramTest
 ```
+
+
+## 15. Optional private admin bot
+
+To enable the operator panel, add to `.env.local`:
+
+```text
+TELEGRAM_ADMIN_CHAT_ID=your-private-chat-id
+TELEGRAM_ADMIN_WEBHOOK_SECRET=random-secret
+```
+
+Then rerun the installer.
+
+The setup endpoint automatically registers:
+
+```text
+https://YOUR_PROJECT_REF.supabase.co/functions/v1/firewatch-admin
+```
+
+as the Telegram webhook.
+
+Open a private chat with the bot and send:
+
+```text
+/panel
+```
+
+Do not use the public channel ID as the admin ID unless that is explicitly what you intend.
