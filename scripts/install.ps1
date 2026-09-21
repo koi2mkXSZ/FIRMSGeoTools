@@ -31,12 +31,16 @@ supabase db push
 
 Write-Host "[3/7] Installing Edge secrets..."
 supabase secrets set "FIRMS_MAP_KEY=$env:FIRMS_MAP_KEY" "TELEGRAM_BOT_TOKEN=$env:TELEGRAM_BOT_TOKEN" "TELEGRAM_CHAT_ID=$env:TELEGRAM_CHAT_ID" "INSTALL_TOKEN=$env:INSTALL_TOKEN"
+if($env:TELEGRAM_ADMIN_CHAT_ID -and $env:TELEGRAM_ADMIN_WEBHOOK_SECRET){
+  supabase secrets set "TELEGRAM_ADMIN_CHAT_ID=$env:TELEGRAM_ADMIN_CHAT_ID" "TELEGRAM_ADMIN_WEBHOOK_SECRET=$env:TELEGRAM_ADMIN_WEBHOOK_SECRET"
+}
 
 Write-Host "[4/7] Deploying Core Edge Functions..."
 supabase functions deploy firewatch-firms --no-verify-jwt
 supabase functions deploy firewatch-telegram --no-verify-jwt
 supabase functions deploy firewatch-setup --no-verify-jwt
 supabase functions deploy firewatch-doctor --no-verify-jwt
+supabase functions deploy firewatch-admin --no-verify-jwt
 
 Write-Host "[5/7] Configuring geography and cron..."
 python scripts/build_setup_payload.py $aoi $regions $config | Set-Content -Encoding utf8 ".setup-payload.json"
