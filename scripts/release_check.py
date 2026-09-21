@@ -24,15 +24,16 @@ listed_functions=sorted(manifest.get("edge_functions",[]))
 if functions!=listed_functions:
     fail(f"manifest Edge Functions differ: repo={functions}, manifest={listed_functions}")
 
-latest=ROOT/"supabase/migrations"/f"{schema:04d}_release_recovery.sql"
-if not latest.exists():
-    fail(f"schema_version={schema} does not match expected migration {latest.name}")
+latest_candidates=sorted((ROOT/"supabase/migrations").glob(f"{schema:04d}_*.sql"))
+if len(latest_candidates)!=1:
+    fail(f"schema_version={schema} must match exactly one migration prefix")
+latest=latest_candidates[0] if latest_candidates else None
 
-text=latest.read_text(encoding="utf-8") if latest.exists() else ""
+text=latest.read_text(encoding="utf-8") if latest else ""
 if version not in text:
-    fail("release metadata migration does not contain VERSION")
-if f"'schema_version',{schema}" in text:
-    pass
+    fail("latest schema migration does not contain VERSION")
+if str(schema) not in text:
+    fail("latest schema migration does not contain schema_version")
 
 readme=(ROOT/"README.md").read_text(encoding="utf-8")
 if "Stage 7" not in readme:
