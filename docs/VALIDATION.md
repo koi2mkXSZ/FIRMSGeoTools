@@ -52,7 +52,9 @@ The protected `firewatch-doctor` endpoint checks:
 - Notification Integrity gaps/backlog;
 - Source Coverage health;
 - source baseline state;
-- independent FIRMS API → AOI → DB Geographic Integrity.
+- independent FIRMS API → AOI → DB Geographic Integrity;
+- dedicated Dashboard signing secret;
+- signed Dashboard endpoint reachability.
 
 No secret values are returned.
 
