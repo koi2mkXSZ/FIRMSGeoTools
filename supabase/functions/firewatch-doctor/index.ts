@@ -6,6 +6,20 @@ const FIRMS_BASE="https://firms.modaps.eosdis.nasa.gov/api/area/csv";
 function json(x:unknown,status=200){return new Response(JSON.stringify(x,null,2),{status,headers:{"content-type":"application/json; charset=utf-8","cache-control":"no-store"}})}
 function mergeStatus(a:string,b:string){const rank:any={pass:0,warn:1,fail:2};return rank[b]>rank[a]?b:a}
 function check(id:string,status:string,message:string,fix?:string,extra:any={}){return {id,status,message,...(fix?{fix}:{}),...extra}}
+const enc=new TextEncoder();
+function b64url(bytes:Uint8Array){let s="";for(const b of bytes)s+=String.fromCharCode(b);return btoa(s).replace(/\+/g,"-").replace(/\//g,"_").replace(/=+$/g,"")}
+async function dashboardProbe(sb:any,base:string){
+  const {data:secret,error}=await sb.rpc("firewatch_dashboard_secret");
+  if(error||!secret)return check("dashboard","fail","Dashboard signing secret is unavailable","Reapply Stage 6 migration.");
+  const exp=Math.floor(Date.now()/1000)+300;
+  const key=await crypto.subtle.importKey("raw",enc.encode(String(secret)),{name:"HMAC",hash:"SHA-256"},false,["sign"]);
+  const raw=new Uint8Array(await crypto.subtle.sign("HMAC",key,enc.encode("dashboard:"+String(exp))));
+  const sig=b64url(raw);
+  const r=await fetch(base+"/functions/v1/firewatch-dashboard?exp="+exp+"&sig="+encodeURIComponent(sig),{signal:AbortSignal.timeout(20000)});
+  const body=await r.text();
+  if(!r.ok||!body.includes("FIRMSGeoTools Dashboard"))return check("dashboard","fail",`Dashboard probe failed: HTTP ${r.status}`,"Deploy firewatch-dashboard and rerun validation.");
+  return check("dashboard","pass","Signed Dashboard endpoint is reachable");
+}
 
 async function checkTelegram(token:string,chatId:string,sendTest:boolean){
   const checks:any[]=[];
@@ -170,6 +184,15 @@ Deno.serve(async(req)=>{
       external.push(check("admin_webhook","fail",`Telegram webhook check failed: ${e instanceof Error?e.message:String(e)}`,"Check Telegram network/API."));
       overall="fail";
     }
+  }
+
+  try{
+    const dc=await dashboardProbe(sb,url);
+    external.push(dc);
+    overall=mergeStatus(overall,dc.status);
+  }catch(e){
+    external.push(check("dashboard","fail",`Dashboard probe failed: ${e instanceof Error?e.message:String(e)}`,"Deploy firewatch-dashboard and reapply Stage 6 migration."));
+    overall="fail";
   }
 
   const dbChecks=Array.isArray(db?.checks)?db.checks:[];
