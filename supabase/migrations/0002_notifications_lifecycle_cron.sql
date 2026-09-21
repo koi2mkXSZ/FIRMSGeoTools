@@ -219,7 +219,7 @@ begin
 
   perform cron.schedule(
     'firmsgeotools-lifecycle','9,24,39,54 * * * *',
-    $$select public.firewatch_refresh_lifecycle();$$
+    $cron$select public.firewatch_refresh_lifecycle();$cron$
   );
 
   insert into public.system_state(key,value,updated_at)
