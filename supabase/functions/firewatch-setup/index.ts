@@ -49,6 +49,8 @@ Deno.serve(async(req)=>{
 
     const {data:cron,error:ce}=await sb.rpc("firewatch_configure_core_cron",{p_base_url:url});
     if(ce)throw ce;
+    const {data:stage5Cron,error:s5e}=await sb.rpc("firewatch_configure_stage5_cron",{p_base_url:url});
+    if(s5e)throw s5e;
 
     let admin:any={enabled:false};
     const tgToken=Deno.env.get("TELEGRAM_BOT_TOKEN");
@@ -72,7 +74,7 @@ Deno.serve(async(req)=>{
       admin={enabled:true,chat_id_configured:true,webhook_url:hookUrl};
     }
 
-    return json({ok:true,geography:geo,cron,admin,bootstrap_note:"Bootstrap completes after the first successful FIRMS ingestion."});
+    return json({ok:true,geography:geo,cron,stage5_cron:stage5Cron,admin,bootstrap_note:"Bootstrap completes after the first successful FIRMS ingestion."});
   }catch(e){
     return json({ok:false,error:e instanceof Error?e.message:String(e)},500);
   }
