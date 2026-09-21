@@ -16,3 +16,6 @@ supabase/.temp/
 config/aoi.geojson
 config/regions.geojson
 config/monitoring.json
+
+# Local recovery and operational-data backups
+backups/
