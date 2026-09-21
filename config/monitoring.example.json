@@ -27,6 +27,6 @@
   },
   "dashboard": {
     "enabled": true,
-    "public_url": "https://koi2mkxsz.github.io/FIRMSGeoTools/dashboard/"
+    "public_url": "https://koi2mkxsz.github.io/FIRMSGeoTools/"
   }
 }
