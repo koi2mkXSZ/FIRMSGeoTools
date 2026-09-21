@@ -32,6 +32,8 @@ for p in sorted(ROOT.rglob("*")):
     try: text=p.read_text(encoding="utf-8")
     except Exception: continue
     rel=str(p.relative_to(ROOT))
+    if rel=="scripts/static_check.py":
+        continue
     for lit in forbidden_literals:
         if lit in text: fail(f"{rel}: forbidden production literal: {lit}")
     if telegram_token.search(text): fail(f"{rel}: looks like a real Telegram bot token")
