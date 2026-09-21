@@ -4,6 +4,9 @@
   "timezone": "UTC",
   "poll_interval_minutes": 15,
   "event_match_hours": 24,
+  "bootstrap_fresh_hours": 3,
+  "inactive_after_hours": 3,
+  "close_after_hours": 24,
   "sources": {
     "VIIRS_NOAA20_NRT": true,
     "VIIRS_NOAA21_NRT": true,
@@ -16,12 +19,11 @@
   },
   "geo": {
     "mode": "custom_geojson",
-    "aoi_file": "config/aoi.example.geojson",
-    "admin1_file": null
+    "aoi_file": "config/aoi.geojson",
+    "regions_file": null
   },
   "telegram": {
-    "enabled": true,
-    "send_updates": true
+    "enabled": true
   },
   "dashboard": {
     "enabled": true
