@@ -1,0 +1,29 @@
+{
+  "project_name": "My FIRMS Monitor",
+  "profile": "core",
+  "timezone": "UTC",
+  "poll_interval_minutes": 15,
+  "event_match_hours": 24,
+  "sources": {
+    "VIIRS_NOAA20_NRT": true,
+    "VIIRS_NOAA21_NRT": true,
+    "VIIRS_SNPP_NRT": true,
+    "MODIS_NRT": true
+  },
+  "event_match_radius_m": {
+    "VIIRS": 750,
+    "MODIS": 1000
+  },
+  "geo": {
+    "mode": "custom_geojson",
+    "aoi_file": "config/aoi.example.geojson",
+    "admin1_file": null
+  },
+  "telegram": {
+    "enabled": true,
+    "send_updates": true
+  },
+  "dashboard": {
+    "enabled": true
+  }
+}
