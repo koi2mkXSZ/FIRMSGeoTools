@@ -138,6 +138,38 @@ Deno.serve(async(req)=>{
     external.push(...t.checks);overall=mergeStatus(overall,t.status);
   }
 
+  const adminId=Deno.env.get("TELEGRAM_ADMIN_CHAT_ID");
+  const adminSecret=Deno.env.get("TELEGRAM_ADMIN_WEBHOOK_SECRET");
+  if(!adminId&&!adminSecret){
+    external.push(check("admin_bot","warn","Telegram admin bot is not configured","Set TELEGRAM_ADMIN_CHAT_ID and TELEGRAM_ADMIN_WEBHOOK_SECRET, then rerun setup."));
+    overall=mergeStatus(overall,"warn");
+  }else if(!adminId||!adminSecret||!tgToken){
+    external.push(check("admin_bot","fail","Telegram admin configuration is incomplete","Set TELEGRAM_ADMIN_CHAT_ID, TELEGRAM_ADMIN_WEBHOOK_SECRET and TELEGRAM_BOT_TOKEN."));
+    overall="fail";
+  }else{
+    try{
+      const wr=await fetch(`https://api.telegram.org/bot${tgToken}/getWebhookInfo`,{signal:AbortSignal.timeout(15000)});
+      const wj=await wr.json().catch(()=>null);
+      const expected=url+"/functions/v1/firewatch-admin";
+      if(!wr.ok||!wj?.ok){
+        external.push(check("admin_webhook","fail","Could not read Telegram webhook status","Rerun setup and check Telegram API availability."));
+        overall="fail";
+      }else if(String(wj.result?.url??"")!==expected){
+        external.push(check("admin_webhook","fail","Telegram admin webhook points to a different URL","Rerun firewatch-setup after deploying firewatch-admin.",{expected,current:wj.result?.url??null}));
+        overall="fail";
+      }else{
+        const pending=Number(wj.result?.pending_update_count??0);
+        const lastError=wj.result?.last_error_message??null;
+        const st=lastError?"warn":"pass";
+        external.push(check("admin_webhook",st,`Admin webhook active; pending updates: ${pending}`,lastError?"Inspect Telegram webhook error and Edge Function logs.":undefined,{last_error:lastError}));
+        overall=mergeStatus(overall,st);
+      }
+    }catch(e){
+      external.push(check("admin_webhook","fail",`Telegram webhook check failed: ${e instanceof Error?e.message:String(e)}`,"Check Telegram network/API."));
+      overall="fail";
+    }
+  }
+
   const dbChecks=Array.isArray(db?.checks)?db.checks:[];
   const all=[...dbChecks,...external];
   const summary={
