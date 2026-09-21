@@ -595,7 +595,7 @@ create or replace function public.firewatch_integrity_diagnostics()
 returns jsonb
 language plpgsql security definer
 set search_path=public,pg_temp
-as $
+as $$
 declare
   v_checks jsonb:='[]'::jsonb;
   v_pass integer:=0;v_warn integer:=0;v_fail integer:=0;
@@ -660,7 +660,7 @@ begin
     'checks',v_checks,
     'notification_integrity',n,'source_coverage',c,'source_baseline',b,'geo_integrity',g
   );
-end $;
+end $$;
 
 revoke execute on function public.firewatch_notification_integrity_refresh() from public,anon,authenticated;
 revoke execute on function public.firewatch_notification_integrity_summary() from public,anon,authenticated;
@@ -698,12 +698,12 @@ create or replace function public.firewatch_configure_stage5_cron(p_base_url tex
 returns jsonb
 language plpgsql security definer
 set search_path=public,cron,vault,pg_temp
-as $
+as $$
 declare
   j record;
   v_url text:=rtrim(p_base_url,'/');
 begin
-  if v_url !~ '^https://[a-z0-9-]+[.]supabase[.]co
+  if v_url !~ '^https://[a-z0-9-]+[.]supabase[.]co$' then
     raise exception 'Invalid Supabase base URL';
   end if;
 
@@ -742,7 +742,7 @@ begin
   on conflict(key) do update set value=excluded.value,updated_at=excluded.updated_at;
 
   return (select value from public.system_state where key='stage5_cron');
-end $;
+end $$;
 
 revoke execute on function public.firewatch_configure_stage5_cron(text) from public,anon,authenticated;
 grant execute on function public.firewatch_configure_stage5_cron(text) to service_role;
