@@ -2,6 +2,20 @@
 
 All notable changes to FIRMSGeoTools are documented here.
 
+## 1.0.0 — Stable
+
+- completed Stage 8 fresh-project acceptance on a brand-new Supabase project;
+- validated zero-to-one migrations, all Core Edge Functions, cron, RLS and recovery;
+- validated real NASA FIRMS ingestion across NOAA-20, NOAA-21, Suomi NPP and MODIS;
+- validated Telegram delivery and private admin webhook;
+- validated Source Coverage and Notification Integrity;
+- validated independent Geographic Integrity with missing_in_db = 0;
+- published the static GitHub Pages Dashboard and validated signed API access;
+- fixed fresh-install SQL delimiter defects found only by real deployment;
+- fixed Dashboard hosting architecture and GitHub Pages URL handling;
+- added Windows PowerShell 5.1-compatible secret generation;
+- finalized stable release metadata and packaging.
+
 ## 0.7.0-pre — Stage 7 packaging
 
 - added release metadata and schema version;
