@@ -26,3 +26,6 @@ verify_jwt = false
 
 [functions.firewatch-doctor]
 verify_jwt = false
+
+[functions.firewatch-admin]
+verify_jwt = false
