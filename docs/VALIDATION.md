@@ -103,3 +103,19 @@ Windows:
 ## Release acceptance rule
 
 A clean-install release is considered ready only when it can be installed into a new Supabase project using this public repository alone and reaches **PASS** in strict mode after the first normal monitoring cycle.
+
+
+## Release consistency
+
+Repository-level release metadata is validated with:
+
+```bash
+python3 scripts/release_check.py
+```
+
+GitHub Actions runs this automatically.
+
+A stable release requires both:
+
+- repository CI success;
+- Stage 8 fresh-project strict acceptance success.
