@@ -15,7 +15,7 @@ Users provide their own credentials and monitoring geography.
 
 ## Current status
 
-**Clean Install Core: Stage 2 / pre-release**
+**Clean Install Core: Stage 3 / pre-release**
 
 Already implemented in the public clean install:
 
@@ -32,7 +32,12 @@ Already implemented in the public clean install:
 - event lifecycle refresh;
 - parameterized pg_cron;
 - Windows PowerShell installer;
-- Linux/macOS installer.
+- Linux/macOS installer;
+- automated installation doctor;
+- local + remote validation;
+- non-invasive FIRMS and Telegram credential checks.
+
+Stage 3 also adds `scripts/validate.*` and the protected `firewatch-doctor` endpoint.
 
 Still being ported from the private production system:
 
@@ -91,5 +96,6 @@ Never commit `.env.local`, your actual AOI/region configuration if private, or a
 - [Architecture](docs/ARCHITECTURE.md)
 - [Clean Core](docs/CLEAN_CORE.md)
 - [Stage 2](docs/STAGE2.md)
+- [Stage 3](docs/STAGE3.md)
 - [Security](docs/SECURITY.md)
 - [Validation](docs/VALIDATION.md)
