@@ -113,6 +113,8 @@ Deno.serve(async(req)=>{
 
   const {data:db,error:de}=await sb.rpc("firewatch_core_diagnostics");
   if(de)return json({ok:false,error:"Database diagnostics failed",detail:de.message},500);
+  const {data:integrity,error:ie}=await sb.rpc("firewatch_integrity_diagnostics");
+  if(ie)return json({ok:false,error:"Integrity diagnostics failed",detail:ie.message},500);
 
   const {data:cfg,error:ce}=await sb.rpc("firewatch_runtime_config");
   if(ce)return json({ok:false,error:"Runtime config failed",detail:ce.message},500);
@@ -171,7 +173,8 @@ Deno.serve(async(req)=>{
   }
 
   const dbChecks=Array.isArray(db?.checks)?db.checks:[];
-  const all=[...dbChecks,...external];
+  const integrityChecks=Array.isArray(integrity?.checks)?integrity.checks:[];
+  const all=[...dbChecks,...integrityChecks,...external];
   const summary={
     pass:all.filter((x:any)=>x.status==="pass").length,
     warn:all.filter((x:any)=>x.status==="warn").length,
@@ -185,6 +188,7 @@ Deno.serve(async(req)=>{
     generated_at:new Date().toISOString(),
     summary,
     database:{status:db?.status,counts:db?.counts,runtime:db?.runtime},
+    integrity:{status:integrity?.status,notification_integrity:integrity?.notification_integrity,source_coverage:integrity?.source_coverage,source_baseline:integrity?.source_baseline,geo_integrity:integrity?.geo_integrity},
     checks:all,
     telegram_test_requested:sendTelegramTest
   },overall==="fail"?422:200);
