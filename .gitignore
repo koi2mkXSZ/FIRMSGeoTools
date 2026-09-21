@@ -10,3 +10,9 @@ secrets.*
 .idea/
 node_modules/
 supabase/.temp/
+.setup-payload.json
+
+# User-specific clean-install configuration.
+config/aoi.geojson
+config/regions.geojson
+config/monitoring.json
