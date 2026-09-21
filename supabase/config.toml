@@ -1,0 +1,28 @@
+project_id = "firmsgeotools"
+
+[api]
+enabled = true
+port = 54321
+schemas = ["public", "graphql_public"]
+extra_search_path = ["public", "extensions"]
+max_rows = 1000
+
+[db]
+port = 54322
+major_version = 17
+
+[studio]
+enabled = true
+port = 54323
+
+[functions.firewatch-firms]
+verify_jwt = false
+
+[functions.firewatch-telegram]
+verify_jwt = false
+
+[functions.firewatch-setup]
+verify_jwt = false
+
+[functions.firewatch-doctor]
+verify_jwt = false
