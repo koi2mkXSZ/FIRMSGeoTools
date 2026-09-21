@@ -6,6 +6,18 @@ function esc(v:unknown){return String(v??"").replace(/[&<>]/g,c=>({"&":"&amp;","
 function age(iso:any){const t=Date.parse(String(iso??""));if(!Number.isFinite(t))return"never";const m=Math.max(0,Math.floor((Date.now()-t)/60000));return m<60?`${m} min`:`${Math.floor(m/60)} h ${m%60} min`}
 function shortId(v:any){return String(v??"").slice(0,8)}
 function num(v:any,d=1){const n=Number(v);return Number.isFinite(n)?n.toFixed(d):"—"}
+const enc=new TextEncoder();
+function b64url(bytes:Uint8Array){let s="";for(const b of bytes)s+=String.fromCharCode(b);return btoa(s).replace(/\+/g,"-").replace(/\//g,"_").replace(/=+$/g,"")}
+async function dashboardUrl(sb:any){
+  const {data:secret,error}=await sb.rpc("firewatch_dashboard_secret");
+  if(error||!secret)throw new Error("Dashboard signing secret unavailable");
+  const base=Deno.env.get("SUPABASE_URL");if(!base)throw new Error("SUPABASE_URL unavailable");
+  const exp=Math.floor(Date.now()/1000)+4*3600;
+  const key=await crypto.subtle.importKey("raw",enc.encode(String(secret)),{name:"HMAC",hash:"SHA-256"},false,["sign"]);
+  const raw=new Uint8Array(await crypto.subtle.sign("HMAC",key,enc.encode("dashboard:"+String(exp))));
+  const sig=b64url(raw);
+  return base+"/functions/v1/firewatch-dashboard?exp="+exp+"&sig="+encodeURIComponent(sig);
+}
 
 async function tg(token:string,method:string,body:any){
   const r=await fetch(`https://api.telegram.org/bot${token}/${method}`,{
@@ -21,6 +33,7 @@ async function send(token:string,chatId:string|number,text:string,reply_markup?:
 async function sendChunks(token:string,chatId:string|number,parts:string[]){for(const p of parts)await send(token,chatId,p)}
 
 const panel={inline_keyboard:[
+  [{text:"🌐 Dashboard",callback_data:"a:dashboard"}],
   [{text:"📊 Status",callback_data:"a:status"},{text:"🛰 Coverage",callback_data:"a:coverage"}],
   [{text:"🔥 Events",callback_data:"a:events"},{text:"📈 Analytics 24h",callback_data:"a:analytics24"}],
   [{text:"📍 Radius search",callback_data:"a:searchgeo"},{text:"🔎 Search help",callback_data:"a:searchhelp"}],
@@ -168,6 +181,7 @@ async function doctorText(sb:any){
 const help=`<b>Admin commands</b>
 
 <code>/panel</code>
+<code>/dashboard</code>
 <code>/status</code>
 <code>/coverage</code>
 <code>/events</code>
@@ -207,6 +221,11 @@ Deno.serve(async(req)=>{
     let text=String(update.message?.text??"").trim();
 
     if(cb){
+      if(cb==="a:dashboard"){
+        const u=await dashboardUrl(sb);
+        await send(token,chatId,"🌐 <b>Dashboard</b>\nLink is valid for 4 hours.",{inline_keyboard:[[{text:"Open Dashboard",url:u}],[{text:"⬅️ Admin panel",callback_data:"a:status"}]]});
+        return json({ok:true});
+      }
       if(cb==="a:status")text="/status";
       else if(cb==="a:coverage")text="/coverage";
       else if(cb==="a:events")text="/events";
@@ -217,7 +236,11 @@ Deno.serve(async(req)=>{
     }
 
     if(!text||text==="/start"||text==="/panel"||text==="/help"){await send(token,chatId,help,panel);return json({ok:true})}
-    if(text.startsWith("/status"))await send(token,chatId,await statusText(sb),panel);
+    if(text.startsWith("/dashboard")){
+      const u=await dashboardUrl(sb);
+      await send(token,chatId,"🌐 <b>Dashboard</b>\nLink is valid for 4 hours.",{inline_keyboard:[[{text:"Open Dashboard",url:u}],[{text:"⬅️ Admin panel",callback_data:"a:status"}]]});
+    }
+    else if(text.startsWith("/status"))await send(token,chatId,await statusText(sb),panel);
     else if(text.startsWith("/coverage"))await send(token,chatId,await coverageText(sb),panel);
     else if(text.startsWith("/events"))await send(token,chatId,await eventsText(sb),panel);
     else if(text.startsWith("/event"))await send(token,chatId,await eventText(sb,text.split(/\s+/)[1]),panel);
