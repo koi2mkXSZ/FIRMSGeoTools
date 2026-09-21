@@ -23,26 +23,30 @@ $config=if($env:CONFIG_FILE){$env:CONFIG_FILE}else{"config/monitoring.json"}
 if(!(Test-Path $aoi)){throw "AOI file not found: $aoi"}
 if(!(Test-Path $config)){throw "Config file not found: $config"}
 
-Write-Host "[1/6] Linking Supabase project..."
+Write-Host "[1/7] Linking Supabase project..."
 supabase link --project-ref $ref
 
-Write-Host "[2/6] Applying database migrations..."
+Write-Host "[2/7] Applying database migrations..."
 supabase db push
 
-Write-Host "[3/6] Installing Edge secrets..."
+Write-Host "[3/7] Installing Edge secrets..."
 supabase secrets set "FIRMS_MAP_KEY=$env:FIRMS_MAP_KEY" "TELEGRAM_BOT_TOKEN=$env:TELEGRAM_BOT_TOKEN" "TELEGRAM_CHAT_ID=$env:TELEGRAM_CHAT_ID" "INSTALL_TOKEN=$env:INSTALL_TOKEN"
 
-Write-Host "[4/6] Deploying Core Edge Functions..."
+Write-Host "[4/7] Deploying Core Edge Functions..."
 supabase functions deploy firewatch-firms --no-verify-jwt
 supabase functions deploy firewatch-telegram --no-verify-jwt
 supabase functions deploy firewatch-setup --no-verify-jwt
+supabase functions deploy firewatch-doctor --no-verify-jwt
 
-Write-Host "[5/6] Configuring geography and cron..."
+Write-Host "[5/7] Configuring geography and cron..."
 python scripts/build_setup_payload.py $aoi $regions $config | Set-Content -Encoding utf8 ".setup-payload.json"
 $headers=@{"Content-Type"="application/json";"x-install-token"=$env:INSTALL_TOKEN}
 $body=Get-Content ".setup-payload.json" -Raw
 Invoke-RestMethod -Method Post -Uri "https://$ref.supabase.co/functions/v1/firewatch-setup" -Headers $headers -Body $body | ConvertTo-Json -Depth 10
 Remove-Item ".setup-payload.json" -ErrorAction SilentlyContinue
 
-Write-Host "[6/6] Core install completed."
+Write-Host "[6/7] Core install completed."
 Write-Host "The first scheduled FIRMS run will finish bootstrap automatically."
+Write-Host "[7/7] Running installation doctor..."
+& .\scripts\validate.ps1 -EnvFile $EnvFile
+if($LASTEXITCODE -ne 0){ exit $LASTEXITCODE }
