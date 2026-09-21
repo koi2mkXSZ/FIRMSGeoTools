@@ -42,6 +42,7 @@ supabase functions deploy firewatch-setup --no-verify-jwt
 supabase functions deploy firewatch-doctor --no-verify-jwt
 supabase functions deploy firewatch-admin --no-verify-jwt
 supabase functions deploy firewatch-geo-integrity --no-verify-jwt
+supabase functions deploy firewatch-dashboard --no-verify-jwt
 
 Write-Host "[5/7] Configuring geography and cron..."
 python scripts/build_setup_payload.py $aoi $regions $config | Set-Content -Encoding utf8 ".setup-payload.json"
