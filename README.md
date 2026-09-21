@@ -15,7 +15,7 @@ Users provide their own credentials and monitoring geography.
 
 ## Current status
 
-**Clean Install Core: Stage 3 / pre-release**
+**Clean Install Core: Stage 4 / pre-release**
 
 Already implemented in the public clean install:
 
@@ -35,14 +35,15 @@ Already implemented in the public clean install:
 - Linux/macOS installer;
 - automated installation doctor;
 - local + remote validation;
-- non-invasive FIRMS and Telegram credential checks.
+- non-invasive FIRMS and Telegram credential checks;
+- private Telegram admin panel;
+- event search and coordinate-radius search;
+- descriptive analytics across all configured regions.
 
 Stage 3 also adds `scripts/validate.*` and the protected `firewatch-doctor` endpoint.
 
 Still being ported from the private production system:
 
-- admin bot;
-- search / analytics;
 - source coverage;
 - notification integrity;
 - geographic integrity audit;
@@ -97,5 +98,6 @@ Never commit `.env.local`, your actual AOI/region configuration if private, or a
 - [Clean Core](docs/CLEAN_CORE.md)
 - [Stage 2](docs/STAGE2.md)
 - [Stage 3](docs/STAGE3.md)
+- [Stage 4](docs/STAGE4.md)
 - [Security](docs/SECURITY.md)
 - [Validation](docs/VALIDATION.md)
