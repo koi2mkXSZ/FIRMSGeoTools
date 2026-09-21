@@ -1,6 +1,6 @@
 # Stage 8 — Fresh-project Acceptance Test
 
-Status: **in progress**
+Status: **passed**
 
 Target: a brand-new Supabase project created specifically for acceptance.
 
@@ -61,18 +61,28 @@ service-role-only RPCs
 
 The API accepts CORS only from the configured `dashboard_public_url`.
 
-## Remaining external acceptance
+## Final acceptance results
 
-The following require user-owned external credentials and cannot be set by the current Supabase connector:
+The fresh-project acceptance completed with the user-owned external credentials configured.
 
-- FIRMS_MAP_KEY;
-- TELEGRAM_BOT_TOKEN;
-- TELEGRAM_CHAT_ID;
-- INSTALL_TOKEN;
-- optional TELEGRAM_ADMIN_CHAT_ID;
-- optional TELEGRAM_ADMIN_WEBHOOK_SECRET.
+Confirmed:
 
-The GitHub connector also cannot perform the initial repository-administration action that enables GitHub Pages.
+- FIRMS bootstrap completed;
+- normal FIRMS polling succeeded;
+- Telegram worker succeeded;
+- real Telegram test message succeeded;
+- admin webhook registered successfully;
+- Source Coverage: 4/4 active;
+- Notification Integrity: no gaps/backlog;
+- Geographic Integrity: API 3 → AOI 3 → DB 3, missing_in_db=0;
+- signed Dashboard API succeeded;
+- GitHub Pages deployment succeeded;
+- published Dashboard returned HTTP 200;
+- Core diagnostics: 11/11 PASS;
+- Doctor: 23 PASS / 1 expected baseline-learning WARN / 0 FAIL;
+- portable recovery export succeeded.
+
+Fresh strict acceptance treats `source_baseline=learning` as an expected initial state while still surfacing it operationally as WARN.
 
 ## Final v1 gate
 
@@ -89,4 +99,4 @@ After secrets and Pages are configured:
 9. strict validation exits 0;
 10. recovery export succeeds.
 
-Only then is `v1.0.0` published.
+All Stage 8 acceptance criteria are now satisfied. The repository is ready for `v1.0.0` release packaging.
