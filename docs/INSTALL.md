@@ -307,3 +307,42 @@ The bot returns a signed Dashboard link valid for four hours.
 The Dashboard is read-only and uses a dedicated Vault HMAC secret generated automatically by migration.
 
 Doctor also checks the Dashboard endpoint during validation.
+
+
+## 17. Backup and recovery
+
+Before major upgrades, create a portable recovery bundle and optional operational-data backup:
+
+Linux/macOS:
+
+```bash
+bash scripts/backup.sh .env.local
+```
+
+Windows:
+
+```powershell
+.\scripts\backup.ps1 -EnvFile .env.local
+```
+
+See [RECOVERY.md](RECOVERY.md).
+
+## 18. Upgrading an existing installation
+
+After updating the repository checkout:
+
+Linux/macOS:
+
+```bash
+bash scripts/upgrade.sh .env.local
+```
+
+Windows:
+
+```powershell
+.\scripts\upgrade.ps1 -EnvFile .env.local
+```
+
+Upgrade does not replace your AOI or region geometry.
+
+See [UPGRADE.md](UPGRADE.md).
