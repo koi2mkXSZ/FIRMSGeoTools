@@ -66,7 +66,7 @@ Deno.serve(async(req)=>{
     if(!body?.aoi)return json({ok:false,error:"aoi GeoJSON is required"},400);
 
     const updates:any={};
-    for(const k of ["project_name","timezone","telegram_enabled","dashboard_enabled","poll_interval_minutes","event_match_hours","bootstrap_fresh_hours","inactive_after_hours","close_after_hours"]){
+    for(const k of ["project_name","timezone","telegram_enabled","dashboard_enabled","dashboard_public_url","poll_interval_minutes","event_match_hours","bootstrap_fresh_hours","inactive_after_hours","close_after_hours"]){
       if(body[k]!==undefined)updates[k]=body[k];
     }
     if(Object.keys(updates).length){
