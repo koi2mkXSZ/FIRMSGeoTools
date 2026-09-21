@@ -1,61 +1,99 @@
-# Validation checklist
+# Validation
 
-A clean install is not complete until all checks pass.
+FIRMSGeoTools includes an automated validation system.
 
-## Database
+## Standard command
 
-- required extensions installed;
-- AOI geometry valid;
-- optional ADM1 geometry valid;
-- required tables present;
-- required RPCs present;
-- RLS enabled where expected.
+Linux/macOS:
 
-## FIRMS
-
-For each enabled source:
-
-- request succeeds;
-- current records parsed;
-- inside/outside AOI accounting balances;
-- deterministic hashes generated;
-- no silent record loss.
-
-Expected invariant:
-
-```text
-API recent = outside AOI + inside AOI
-inside AOI = DB matched + DB missing
+```bash
+bash scripts/validate.sh .env.local
 ```
 
-Healthy state requires `DB missing = 0` after ingestion has caught up.
+Windows PowerShell:
 
-## Telegram
+```powershell
+.\scripts\validate.ps1 -EnvFile .env.local
+```
 
-- bot token valid;
-- destination writable;
-- admin pairing works;
-- webhook healthy;
-- one controlled test message succeeds.
+The installer runs this automatically as its final step.
 
-## Cron
+## Local checks
 
-- project ref points to the current project;
-- cron secret resolves from Vault;
-- no stale project URL remains;
-- source workers run at expected cadence.
+Before contacting Supabase, validation checks:
 
-## Dashboard
+- `SUPABASE_PROJECT_REF`;
+- `FIRMS_MAP_KEY`;
+- `TELEGRAM_BOT_TOKEN`;
+- `TELEGRAM_CHAT_ID`;
+- `INSTALL_TOKEN`;
+- AOI GeoJSON syntax and geometry types;
+- monitoring config syntax;
+- polling interval bounds.
 
-- frontend contains no secret;
-- signed link opens;
-- unsigned protected API request is rejected;
-- map/search/analytics load.
+## Remote Doctor checks
 
-## Recovery
+The protected `firewatch-doctor` endpoint checks:
 
-A release is stable only after a fresh-project installation succeeds using only:
+- AOI and region geometry;
+- runtime bbox;
+- enabled FIRMS sources;
+- RLS state;
+- cron jobs;
+- Vault cron secret;
+- bootstrap state;
+- FIRMS worker state;
+- Telegram worker state;
+- Telegram backlog;
+- detections outside AOI;
+- orphan detections;
+- NASA FIRMS Area API response for every enabled source;
+- Telegram bot identity and destination access.
 
-- this repository;
-- documented credentials;
-- documented geography files.
+No secret values are returned.
+
+## Telegram test message
+
+Normal validation does not send any message.
+
+To send one silent test message:
+
+Linux/macOS:
+
+```bash
+bash scripts/validate.sh .env.local --telegram-test
+```
+
+Windows:
+
+```powershell
+.\scripts\validate.ps1 -EnvFile .env.local -TelegramTest
+```
+
+## Strict acceptance mode
+
+Warnings are expected immediately after a fresh setup because the first cron cycle may not yet have run.
+
+For release acceptance after at least one normal cron cycle:
+
+Linux/macOS:
+
+```bash
+bash scripts/validate.sh .env.local --strict
+```
+
+Windows:
+
+```powershell
+.\scripts\validate.ps1 -EnvFile .env.local -Strict
+```
+
+## Exit codes
+
+- `0` — PASS, or WARN in normal mode;
+- `1` — WARN in strict mode;
+- `2` — FAIL.
+
+## Release acceptance rule
+
+A clean-install release is considered ready only when it can be installed into a new Supabase project using this public repository alone and reaches **PASS** in strict mode after the first normal monitoring cycle.
