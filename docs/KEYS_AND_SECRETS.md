@@ -11,6 +11,8 @@ FIRMSGeoTools separates local installer values, Edge Function secrets and databa
 | TELEGRAM_BOT_TOKEN | yes | BotFather | Supabase Edge secret |
 | TELEGRAM_CHAT_ID | yes | Telegram destination | Supabase Edge secret |
 | INSTALL_TOKEN | yes during setup | generate locally | Supabase Edge secret |
+| TELEGRAM_ADMIN_CHAT_ID | optional | your private Telegram chat/user ID | Supabase Edge secret |
+| TELEGRAM_ADMIN_WEBHOOK_SECRET | optional | generate locally | Supabase Edge secret |
 
 ## Automatically generated
 
@@ -79,3 +81,17 @@ Never commit:
 - database passwords;
 - Supabase Vault values;
 - production database dumps.
+
+
+## Telegram admin panel
+
+To enable the private admin bot, configure both:
+
+```text
+TELEGRAM_ADMIN_CHAT_ID=
+TELEGRAM_ADMIN_WEBHOOK_SECRET=
+```
+
+The webhook secret must be a random value compatible with Telegram webhook `secret_token` characters. A hexadecimal random string is suitable.
+
+The public destination `TELEGRAM_CHAT_ID` and private `TELEGRAM_ADMIN_CHAT_ID` are intentionally separate.
