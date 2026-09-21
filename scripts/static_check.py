@@ -47,10 +47,12 @@ required=[
     "supabase/migrations/0001_core_schema.sql",
     "supabase/migrations/0002_notifications_lifecycle_cron.sql",
     "supabase/migrations/0003_diagnostics.sql",
+    "supabase/migrations/0004_admin_search_analytics.sql",
     "supabase/functions/firewatch-firms/index.ts",
     "supabase/functions/firewatch-telegram/index.ts",
     "supabase/functions/firewatch-setup/index.ts",
     "supabase/functions/firewatch-doctor/index.ts",
+    "supabase/functions/firewatch-admin/index.ts",
     "scripts/install.sh","scripts/install.ps1","scripts/validate.py"
 ]
 for rel in required:
