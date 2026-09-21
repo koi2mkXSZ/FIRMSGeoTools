@@ -15,7 +15,7 @@ Users provide their own credentials and monitoring geography.
 
 ## Current status
 
-**Clean Install Core: Stage 6 / pre-release**
+**Clean Install Core: Stage 7 / pre-release**
 
 Already implemented in the public clean install:
 
@@ -42,7 +42,11 @@ Already implemented in the public clean install:
 - Notification Integrity;
 - Source Coverage and robust source baseline;
 - independent geographic integrity audit;
-- self-hosted read-only Web Dashboard with signed temporary access.
+- self-hosted read-only Web Dashboard with signed temporary access;
+- portable recovery bundle;
+- upgrade and backup workflows;
+- release manifest and changelog;
+- release consistency checks.
 
 Stage 3 also adds `scripts/validate.*` and the protected `firewatch-doctor` endpoint.
 
@@ -101,5 +105,9 @@ Never commit `.env.local`, your actual AOI/region configuration if private, or a
 - [Stage 4](docs/STAGE4.md)
 - [Stage 5](docs/STAGE5.md)
 - [Stage 6](docs/STAGE6.md)
+- [Stage 7](docs/STAGE7.md)
 - [Security](docs/SECURITY.md)
 - [Validation](docs/VALIDATION.md)
+- [Recovery](docs/RECOVERY.md)
+- [Upgrade](docs/UPGRADE.md)
+- [Release process](docs/RELEASE.md)
