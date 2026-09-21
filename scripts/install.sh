@@ -36,11 +36,18 @@ supabase secrets set \
   TELEGRAM_CHAT_ID="$TELEGRAM_CHAT_ID" \
   INSTALL_TOKEN="$INSTALL_TOKEN"
 
+if [[ -n "${TELEGRAM_ADMIN_CHAT_ID:-}" && -n "${TELEGRAM_ADMIN_WEBHOOK_SECRET:-}" ]]; then
+  supabase secrets set \
+    TELEGRAM_ADMIN_CHAT_ID="$TELEGRAM_ADMIN_CHAT_ID" \
+    TELEGRAM_ADMIN_WEBHOOK_SECRET="$TELEGRAM_ADMIN_WEBHOOK_SECRET"
+fi
+
 echo "[4/7] Deploying Core Edge Functions..."
 supabase functions deploy firewatch-firms --no-verify-jwt
 supabase functions deploy firewatch-telegram --no-verify-jwt
 supabase functions deploy firewatch-setup --no-verify-jwt
 supabase functions deploy firewatch-doctor --no-verify-jwt
+supabase functions deploy firewatch-admin --no-verify-jwt
 
 echo "[5/7] Configuring geography and cron..."
 python3 scripts/build_setup_payload.py "$AOI_FILE" "$REGIONS_FILE" "$CONFIG_FILE" > .setup-payload.json
