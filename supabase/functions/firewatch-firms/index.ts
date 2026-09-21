@@ -57,14 +57,26 @@ Deno.serve(async(req)=>{
   try{
     const parts=await Promise.all((cfg.sources??[]).map((s:any)=>fetchSource(mapKey,s,bbox,now)));
     const records=parts.flatMap((x:any)=>x.records);
+    const {data:bootState}=await sb.from("system_state").select("value").eq("key","bootstrap").maybeSingle();
+    const bootstrapDone=Boolean(bootState?.value?.done);
+
     const {data:batch,error:batchError}=await sb.rpc("ingest_firms_batch",{p_records:records,p_match_window_hours:Number(cfg.event_match_hours??24)});
     if(batchError)throw batchError;
+
+    let bootstrap:any=null;
+    if(!bootstrapDone){
+      const {data:b,error:be}=await sb.rpc("firewatch_complete_bootstrap",{p_fresh_hours:Number(cfg.bootstrap_fresh_hours??3)});
+      if(be)throw be;
+      bootstrap=b;
+    }
 
     const state={
       status:"active",last_success_run:new Date().toISOString(),last_error:null,
       bbox,window_hours:WINDOW_HOURS,
       sources:parts.map((x:any)=>({source:x.source,fetched:x.fetched,recent:x.recent})),
       total_recent:records.length,
+      bootstrap_was_done:bootstrapDone,
+      bootstrap,
       batch
     };
     await sb.from("system_state").upsert({key:"monitor_firms",value:state,updated_at:new Date().toISOString()});
