@@ -38,3 +38,4 @@ jobs:
           deno check --config supabase/functions/firewatch-telegram/deno.json supabase/functions/firewatch-telegram/index.ts
           deno check --config supabase/functions/firewatch-setup/deno.json supabase/functions/firewatch-setup/index.ts
           deno check --config supabase/functions/firewatch-doctor/deno.json supabase/functions/firewatch-doctor/index.ts
+          deno check --config supabase/functions/firewatch-admin/deno.json supabase/functions/firewatch-admin/index.ts
