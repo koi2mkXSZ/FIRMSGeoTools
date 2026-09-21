@@ -1,7 +1,7 @@
 -- FIRMSGeoTools Community Edition
 -- Clean Core schema v0.2: bootstrap-safe notifications, lifecycle, Telegram lease, cron installer.
 
-create extension if not exists pg_cron;
+create extension if not exists pg_cron with schema pg_catalog;
 create extension if not exists pg_net;
 create extension if not exists supabase_vault with schema vault;
 
