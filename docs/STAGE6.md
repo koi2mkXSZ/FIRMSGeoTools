@@ -4,14 +4,22 @@ Stage 6 adds a self-hosted read-only web dashboard to the Core profile.
 
 ## Hosting model
 
-Unlike the production deployment, Community Edition does not require a separate GitHub Pages repository.
+Stage 8 validation found that Supabase Edge Runtime forces HTML responses to plain text with a sandbox CSP.
 
-The `firewatch-dashboard` Supabase Edge Function serves both:
+The final Community architecture therefore uses:
 
-- the HTML dashboard;
-- the read-only dashboard API.
+- a static Dashboard frontend (GitHub Pages by default);
+- `firewatch-dashboard` as a signed read-only JSON API.
 
-This removes per-user CORS and static-host configuration.
+The frontend URL is configured with `dashboard.public_url` in `config/monitoring.json`.
+
+The canonical upstream frontend is:
+
+```text
+https://koi2mkxsz.github.io/FIRMSGeoTools/
+```
+
+Forks may deploy their own static frontend and replace this URL.
 
 ## Access security
 
@@ -146,11 +154,8 @@ Failure to deploy or authenticate the Dashboard is reported as **FAIL**.
 
 No new user secret is required.
 
-The normal installer automatically:
+The installer automatically deploys the signed Dashboard API and stores the configured static frontend URL.
 
-1. applies migration `0006_dashboard.sql`;
-2. creates the dashboard HMAC secret in Vault;
-3. deploys `firewatch-dashboard`;
-4. leaves the private admin bot able to generate signed links.
+The repository includes a GitHub Pages workflow for the static frontend.
 
-No GitHub Pages configuration is required.
+Initial Pages enablement can require one repository-administration action in GitHub Settings.
