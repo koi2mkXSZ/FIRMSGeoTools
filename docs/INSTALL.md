@@ -191,7 +191,8 @@ The installer:
 3. installs Edge secrets;
 4. deploys Core Edge Functions;
 5. uploads AOI/regions;
-6. configures cron using the project's own Supabase URL.
+6. configures cron using the project's own Supabase URL;
+7. deploys and runs the installation doctor.
 
 ## 11. Bootstrap behavior
 
@@ -226,3 +227,36 @@ Until that stage is complete, verify the deployment from the Supabase dashboard:
 - after the first FIRMS run, `bootstrap.done=true`;
 - `monitor_firms.last_success_run` updates;
 - Telegram receives only fresh new events.
+
+
+## 14. Automatic validation
+
+The installer finishes by running the Stage 3 doctor.
+
+Immediately after installation, `WARN` for bootstrap/first worker execution is normal.
+
+After one monitoring cycle, run strict validation:
+
+Linux/macOS:
+
+```bash
+bash scripts/validate.sh .env.local --strict
+```
+
+PowerShell:
+
+```powershell
+.\scripts\validate.ps1 -EnvFile .env.local -Strict
+```
+
+To test actual Telegram publishing once:
+
+```bash
+bash scripts/validate.sh .env.local --telegram-test
+```
+
+or:
+
+```powershell
+.\scripts\validate.ps1 -EnvFile .env.local -TelegramTest
+```
