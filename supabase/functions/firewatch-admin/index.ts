@@ -9,14 +9,24 @@ function num(v:any,d=1){const n=Number(v);return Number.isFinite(n)?n.toFixed(d)
 const enc=new TextEncoder();
 function b64url(bytes:Uint8Array){let s="";for(const b of bytes)s+=String.fromCharCode(b);return btoa(s).replace(/\+/g,"-").replace(/\//g,"_").replace(/=+$/g,"")}
 async function dashboardUrl(sb:any){
-  const {data:secret,error}=await sb.rpc("firewatch_dashboard_secret");
+  const [{data:secret,error},{data:pc,error:pce}]=await Promise.all([
+    sb.rpc("firewatch_dashboard_secret"),
+    sb.from("project_config").select("dashboard_public_url,dashboard_enabled").eq("id",true).single()
+  ]);
   if(error||!secret)throw new Error("Dashboard signing secret unavailable");
+  if(pce)throw pce;
+  if(pc?.dashboard_enabled===false)throw new Error("Dashboard is disabled");
+  if(!pc?.dashboard_public_url)throw new Error("dashboard_public_url is not configured");
   const base=Deno.env.get("SUPABASE_URL");if(!base)throw new Error("SUPABASE_URL unavailable");
   const exp=Math.floor(Date.now()/1000)+4*3600;
   const key=await crypto.subtle.importKey("raw",enc.encode(String(secret)),{name:"HMAC",hash:"SHA-256"},false,["sign"]);
   const raw=new Uint8Array(await crypto.subtle.sign("HMAC",key,enc.encode("dashboard:"+String(exp))));
   const sig=b64url(raw);
-  return base+"/functions/v1/firewatch-dashboard?exp="+exp+"&sig="+encodeURIComponent(sig);
+  const front=new URL(String(pc.dashboard_public_url));
+  front.searchParams.set("api",base+"/functions/v1/firewatch-dashboard");
+  front.searchParams.set("exp",String(exp));
+  front.searchParams.set("sig",sig);
+  return front.toString();
 }
 
 async function tg(token:string,method:string,body:any){
