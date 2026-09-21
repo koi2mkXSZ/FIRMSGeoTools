@@ -23,25 +23,26 @@ CONFIG_FILE="${CONFIG_FILE:-config/monitoring.json}"
 [[ -f "$AOI_FILE" ]] || { echo "AOI file not found: $AOI_FILE"; exit 1; }
 [[ -f "$CONFIG_FILE" ]] || { echo "Config file not found: $CONFIG_FILE"; exit 1; }
 
-echo "[1/6] Linking Supabase project..."
+echo "[1/7] Linking Supabase project..."
 supabase link --project-ref "$SUPABASE_PROJECT_REF"
 
-echo "[2/6] Applying database migrations..."
+echo "[2/7] Applying database migrations..."
 supabase db push
 
-echo "[3/6] Installing Edge secrets..."
+echo "[3/7] Installing Edge secrets..."
 supabase secrets set \
   FIRMS_MAP_KEY="$FIRMS_MAP_KEY" \
   TELEGRAM_BOT_TOKEN="$TELEGRAM_BOT_TOKEN" \
   TELEGRAM_CHAT_ID="$TELEGRAM_CHAT_ID" \
   INSTALL_TOKEN="$INSTALL_TOKEN"
 
-echo "[4/6] Deploying Core Edge Functions..."
+echo "[4/7] Deploying Core Edge Functions..."
 supabase functions deploy firewatch-firms --no-verify-jwt
 supabase functions deploy firewatch-telegram --no-verify-jwt
 supabase functions deploy firewatch-setup --no-verify-jwt
+supabase functions deploy firewatch-doctor --no-verify-jwt
 
-echo "[5/6] Configuring geography and cron..."
+echo "[5/7] Configuring geography and cron..."
 python3 scripts/build_setup_payload.py "$AOI_FILE" "$REGIONS_FILE" "$CONFIG_FILE" > .setup-payload.json
 curl --fail-with-body -sS \
   -X POST "https://$SUPABASE_PROJECT_REF.supabase.co/functions/v1/firewatch-setup" \
@@ -51,5 +52,7 @@ curl --fail-with-body -sS \
 rm -f .setup-payload.json
 
 echo
-echo "[6/6] Core install completed."
+echo "[6/7] Core install completed."
 echo "The first scheduled FIRMS run will finish bootstrap automatically."
+echo "[7/7] Running installation doctor..."
+bash scripts/validate.sh "$ENV_FILE"
