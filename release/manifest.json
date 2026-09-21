@@ -1,8 +1,8 @@
 {
   "name": "FIRMSGeoTools",
-  "version": "0.8.0-pre",
-  "schema_version": 8,
-  "channel": "pre-release",
+  "version": "1.0.0",
+  "schema_version": 9,
+  "channel": "stable",
   "profile": "core",
   "migrations": [
     "0001_core_schema.sql",
@@ -12,7 +12,8 @@
     "0005_integrity_coverage.sql",
     "0006_dashboard.sql",
     "0007_release_recovery.sql",
-    "0008_dashboard_static_host.sql"
+    "0008_dashboard_static_host.sql",
+    "0009_release_v1_0_0.sql"
   ],
   "edge_functions": [
     "firewatch-firms",
@@ -24,11 +25,14 @@
     "firewatch-dashboard"
   ],
   "stable_requires": [
-    "fresh-project install",
-    "strict validation pass",
-    "Telegram test delivery",
-    "FIRMS ingestion cycle",
+    "fresh-project install passed",
+    "strict validation passed with only expected baseline-learning state",
+    "Telegram test delivery passed",
+    "FIRMS ingestion cycle passed",
+    "source coverage healthy",
+    "notification integrity no gaps",
     "geographic integrity missing_in_db=0",
-    "dashboard signed-link probe"
+    "dashboard published and reachable",
+    "recovery export passed"
   ]
 }
