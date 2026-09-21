@@ -64,17 +64,38 @@ async function statusText(sb:any){
   ].join("\n");
 }
 async function coverageText(sb:any){
-  const [{data:sum,error:e1},{data:cfg,error:e2}]=await Promise.all([sb.rpc("firewatch_admin_summary"),sb.rpc("firewatch_runtime_config")]);
-  if(e1)throw e1;if(e2)throw e2;
-  const by=new Map((sum?.firms?.sources??[]).map((x:any)=>[x.source,x]));
-  const lines=["🛰 <b>FIRMS Source Coverage</b>",""];
+  const [
+    {data:sum,error:e1},{data:cfg,error:e2},{data:cov,error:e3},
+    {data:base,error:e4},{data:notif,error:e5},{data:geo,error:e6}
+  ]=await Promise.all([
+    sb.rpc("firewatch_admin_summary"),sb.rpc("firewatch_runtime_config"),
+    sb.rpc("firewatch_source_coverage_summary"),sb.rpc("firewatch_source_baseline_summary"),
+    sb.rpc("firewatch_notification_integrity_summary"),sb.rpc("firewatch_geo_integrity_summary")
+  ]);
+  if(e1)throw e1;if(e2)throw e2;if(e3)throw e3;if(e4)throw e4;if(e5)throw e5;if(e6)throw e6;
+
+  const live=new Map((sum?.firms?.sources??[]).map((x:any)=>[x.source,x]));
+  const coverage=new Map((cov?.sources??[]).map((x:any)=>[x.source_id,x]));
+  const anomalies=new Map((base?.sources??[]).map((x:any)=>[x.source_id,x]));
+  const geoSrc=new Map((geo?.sources??[]).map((x:any)=>[x.source_id,x]));
+  const lines=["🛰 <b>Integrity & Coverage</b>",""];
+
   for(const s of cfg?.sources??[]){
-    const r:any=by.get(s.source_id);
-    lines.push(`${r?"✅":"⚪"} <b>${esc(s.display_name)}</b>`);
-    lines.push(`   source ${esc(s.source_id)} • resolution ${Number(s.resolution_m)} m • radius ${Number(s.match_radius_m)} m`);
-    lines.push(`   fetched ${Number(r?.fetched??0)} • recent ${Number(r?.recent??0)}`);
+    const l:any=live.get(s.source_id),cv:any=coverage.get(s.source_id),an:any=anomalies.get(s.source_id),gs:any=geoSrc.get(s.source_id);
+    const mark=cv?.status==="active"&&Number(gs?.missing_in_db??0)===0?"✅":cv?.status?"⚠️":"⚪";
+    lines.push(`${mark} <b>${esc(s.display_name)}</b>`);
+    lines.push(`   worker ${esc(cv?.status??"unknown")} • activity ${esc(cv?.activity??"unknown")} • baseline ${esc(an?.status??"learning")}`);
+    lines.push(`   fetched ${Number(l?.fetched??cv?.fetched_last_run??0)} • recent ${Number(l?.recent??cv?.recent_last_run??0)} • DB 24h ${Number(cv?.detections_24h??0)}`);
+    if(gs)lines.push(`   audit API ${Number(gs.api_recent??0)} → AOI ${Number(gs.inside_aoi??0)} → DB ${Number(gs.db_matched??0)} • missing ${Number(gs.missing_in_db??0)}`);
   }
-  lines.push("",`Worker: ${esc(sum?.firms?.status??"not run")} • ${esc(age(sum?.firms?.last_success_run))}`);
+
+  const ns=notif?.state??{},gg=geo?.state??{},bs=base?.state??{},cs=cov?.state??{};
+  lines.push("",
+    `Source Coverage: <b>${esc(cs.status??"unknown")}</b> • active ${Number(cs.sources_active??0)}/${Number(cs.sources_total??0)} • degraded ${Number(cs.sources_degraded??0)}`,
+    `Baseline: <b>${esc(bs.status??"learning")}</b> • watch ${Number(bs.sources_watch??0)} • anomaly ${Number(bs.sources_anomaly??0)}`,
+    `Notification Integrity: <b>${esc(ns.status??"unknown")}</b> • gaps ${Number(ns.notification_gaps??0)} • backlog ${Number(ns.delivery_backlog??0)}`,
+    `Geo Integrity: <b>${esc(gg.status??"unknown")}</b> • API ${Number(gg.api_recent??0)} → AOI ${Number(gg.inside_aoi??0)} → DB ${Number(gg.db_matched??0)} • missing ${Number(gg.missing_in_db??0)}`
+  );
   return lines.join("\n");
 }
 async function eventsText(sb:any){
