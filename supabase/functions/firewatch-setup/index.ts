@@ -1,10 +1,43 @@
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "@supabase/supabase-js";
 
-function json(x:unknown,status=200){return new Response(JSON.stringify(x,null,2),{status,headers:{"content-type":"application/json; charset=utf-8"}})}
+function json(x:unknown,status=200){return new Response(JSON.stringify(x,null,2),{status,headers:{"content-type":"application/json; charset=utf-8","cache-control":"no-store"}})}
+
+async function configureAdmin(url:string){
+  const tgToken=Deno.env.get("TELEGRAM_BOT_TOKEN");
+  const adminChatId=Deno.env.get("TELEGRAM_ADMIN_CHAT_ID");
+  const adminWebhookSecret=Deno.env.get("TELEGRAM_ADMIN_WEBHOOK_SECRET");
+  if(!tgToken||!adminChatId||!adminWebhookSecret)return {enabled:false};
+
+  const hookUrl=url+"/functions/v1/firewatch-admin";
+  const wr=await fetch(`https://api.telegram.org/bot${tgToken}/setWebhook`,{
+    method:"POST",
+    headers:{"content-type":"application/json"},
+    body:JSON.stringify({
+      url:hookUrl,
+      secret_token:adminWebhookSecret,
+      allowed_updates:["message","callback_query"],
+      drop_pending_updates:false
+    }),
+    signal:AbortSignal.timeout(20000)
+  });
+  const wj=await wr.json().catch(()=>null);
+  if(!wr.ok||!wj?.ok)throw new Error(`Telegram setWebhook failed: ${wj?.description??wr.status}`);
+  return {enabled:true,chat_id_configured:true,webhook_url:hookUrl};
+}
+
+async function configureRuntime(sb:any,url:string){
+  const {data:cron,error:ce}=await sb.rpc("firewatch_configure_core_cron",{p_base_url:url});
+  if(ce)throw ce;
+  const {data:stage5Cron,error:s5e}=await sb.rpc("firewatch_configure_stage5_cron",{p_base_url:url});
+  if(s5e)throw s5e;
+  const admin=await configureAdmin(url);
+  return {cron,stage5_cron:stage5Cron,admin};
+}
 
 Deno.serve(async(req)=>{
   if(req.method!=="POST")return json({ok:false,error:"POST required"},405);
+
   const installToken=Deno.env.get("INSTALL_TOKEN"),given=req.headers.get("x-install-token")??"";
   if(!installToken||given!==installToken)return json({ok:false,error:"Unauthorized"},401);
 
@@ -13,7 +46,23 @@ Deno.serve(async(req)=>{
   const sb=createClient(url,key,{auth:{persistSession:false}});
 
   try{
-    const body=await req.json();
+    const body=await req.json().catch(()=>({}));
+    const mode=String(body?.mode??"install").toLowerCase();
+
+    if(mode==="recovery_export"){
+      const {data,error}=await sb.rpc("firewatch_recovery_export");
+      if(error)throw error;
+      return json({ok:true,recovery:data});
+    }
+
+    if(mode==="upgrade"){
+      const runtime=await configureRuntime(sb,url);
+      const {data:release,error:re}=await sb.rpc("firewatch_release_info");
+      if(re)throw re;
+      return json({ok:true,mode:"upgrade",release,...runtime});
+    }
+
+    if(mode!=="install")return json({ok:false,error:"Unknown setup mode"},400);
     if(!body?.aoi)return json({ok:false,error:"aoi GeoJSON is required"},400);
 
     const updates:any={};
@@ -25,15 +74,15 @@ Deno.serve(async(req)=>{
       if(error)throw error;
     }
 
-    if(body.sources && typeof body.sources==="object"){
+    if(body.sources&&typeof body.sources==="object"){
       for(const [sourceId,enabled] of Object.entries(body.sources)){
         const {error}=await sb.from("firms_sources").update({enabled:Boolean(enabled)}).eq("source_id",sourceId);
         if(error)throw error;
       }
     }
-    if(body.event_match_radius_m && typeof body.event_match_radius_m==="object"){
-      const viirs=Number(body.event_match_radius_m.VIIRS);
-      const modis=Number(body.event_match_radius_m.MODIS);
+
+    if(body.event_match_radius_m&&typeof body.event_match_radius_m==="object"){
+      const viirs=Number(body.event_match_radius_m.VIIRS),modis=Number(body.event_match_radius_m.MODIS);
       if(Number.isFinite(viirs)&&viirs>0){
         const {error}=await sb.from("firms_sources").update({match_radius_m:Math.round(viirs)}).like("source_id","VIIRS_%");
         if(error)throw error;
@@ -47,34 +96,17 @@ Deno.serve(async(req)=>{
     const {data:geo,error:ge}=await sb.rpc("firewatch_set_geography",{p_aoi:body.aoi,p_regions:body.regions??null});
     if(ge)throw ge;
 
-    const {data:cron,error:ce}=await sb.rpc("firewatch_configure_core_cron",{p_base_url:url});
-    if(ce)throw ce;
-    const {data:stage5Cron,error:s5e}=await sb.rpc("firewatch_configure_stage5_cron",{p_base_url:url});
-    if(s5e)throw s5e;
+    const runtime=await configureRuntime(sb,url);
+    const {data:release}=await sb.rpc("firewatch_release_info");
 
-    let admin:any={enabled:false};
-    const tgToken=Deno.env.get("TELEGRAM_BOT_TOKEN");
-    const adminChatId=Deno.env.get("TELEGRAM_ADMIN_CHAT_ID");
-    const adminWebhookSecret=Deno.env.get("TELEGRAM_ADMIN_WEBHOOK_SECRET");
-    if(tgToken&&adminChatId&&adminWebhookSecret){
-      const hookUrl=url+"/functions/v1/firewatch-admin";
-      const wr=await fetch(`https://api.telegram.org/bot${tgToken}/setWebhook`,{
-        method:"POST",
-        headers:{"content-type":"application/json"},
-        body:JSON.stringify({
-          url:hookUrl,
-          secret_token:adminWebhookSecret,
-          allowed_updates:["message","callback_query"],
-          drop_pending_updates:false
-        }),
-        signal:AbortSignal.timeout(20000)
-      });
-      const wj=await wr.json().catch(()=>null);
-      if(!wr.ok||!wj?.ok)throw new Error(`Telegram setWebhook failed: ${wj?.description??wr.status}`);
-      admin={enabled:true,chat_id_configured:true,webhook_url:hookUrl};
-    }
-
-    return json({ok:true,geography:geo,cron,stage5_cron:stage5Cron,admin,bootstrap_note:"Bootstrap completes after the first successful FIRMS ingestion."});
+    return json({
+      ok:true,
+      mode:"install",
+      release,
+      geography:geo,
+      ...runtime,
+      bootstrap_note:"Bootstrap completes after the first successful FIRMS ingestion."
+    });
   }catch(e){
     return json({ok:false,error:e instanceof Error?e.message:String(e)},500);
   }
