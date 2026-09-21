@@ -288,3 +288,22 @@ Open a private chat with the bot and send:
 ```
 
 Do not use the public channel ID as the admin ID unless that is explicitly what you intend.
+
+
+## 16. Web Dashboard
+
+The Core installer deploys a self-hosted Dashboard automatically.
+
+No separate web hosting is required.
+
+If the private Telegram admin bot is configured, send:
+
+```text
+/dashboard
+```
+
+The bot returns a signed Dashboard link valid for four hours.
+
+The Dashboard is read-only and uses a dedicated Vault HMAC secret generated automatically by migration.
+
+Doctor also checks the Dashboard endpoint during validation.
