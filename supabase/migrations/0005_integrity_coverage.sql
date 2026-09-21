@@ -621,6 +621,61 @@ begin
   perform cron.schedule('firmsgeotools-notification-integrity','38 * * * *','select public.firewatch_notification_integrity_refresh();');
 end $$;
 
+create or replace function public.firewatch_configure_stage5_cron(p_base_url text)
+returns jsonb
+language plpgsql security definer
+set search_path=public,cron,vault,pg_temp
+as $
+declare
+  j record;
+  v_url text:=rtrim(p_base_url,'/');
+begin
+  if v_url !~ '^https://[a-z0-9-]+[.]supabase[.]co
+on conflict(key) do update set value=excluded.value,updated_at=excluded.updated_at;
+ then
+    raise exception 'Invalid Supabase base URL';
+  end if;
+
+  for j in select jobid from cron.job where jobname in(
+    'firmsgeotools-source-coverage','firmsgeotools-source-baseline',
+    'firmsgeotools-notification-integrity','firmsgeotools-geo-integrity'
+  ) loop perform cron.unschedule(j.jobid); end loop;
+
+  perform cron.schedule('firmsgeotools-source-coverage','34 * * * *','select public.firewatch_source_coverage_refresh();');
+  perform cron.schedule('firmsgeotools-source-baseline','36 * * * *','select public.firewatch_source_baseline_refresh();');
+  perform cron.schedule('firmsgeotools-notification-integrity','38 * * * *','select public.firewatch_notification_integrity_refresh();');
+
+  perform cron.schedule(
+    'firmsgeotools-geo-integrity','39 * * * *',
+    format($cmd$
+      select net.http_post(
+        url := %L,
+        headers := jsonb_build_object(
+          'Content-Type','application/json',
+          'x-cron-secret',(select decrypted_secret from vault.decrypted_secrets where name='firewatch_cron_secret' limit 1)
+        ),
+        body := '{}'::jsonb,
+        timeout_milliseconds := 90000
+      );
+    $cmd$,v_url||'/functions/v1/firewatch-geo-integrity')
+  );
+
+  insert into public.system_state(key,value,updated_at)
+  values('stage5_cron',jsonb_build_object(
+    'configured',true,'configured_at',now(),
+    'source_coverage','34 * * * *',
+    'source_baseline','36 * * * *',
+    'notification_integrity','38 * * * *',
+    'geo_integrity','39 * * * *'
+  ),now())
+  on conflict(key) do update set value=excluded.value,updated_at=excluded.updated_at;
+
+  return (select value from public.system_state where key='stage5_cron');
+end $;
+
+revoke execute on function public.firewatch_configure_stage5_cron(text) from public,anon,authenticated;
+grant execute on function public.firewatch_configure_stage5_cron(text) to service_role;
+
 insert into public.system_state(key,value,updated_at)
 values('clean_install_stage',jsonb_build_object('stage',5,'version','core-v0.5','status','pre-release'),now())
 on conflict(key) do update set value=excluded.value,updated_at=excluded.updated_at;
