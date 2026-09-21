@@ -1,0 +1,23 @@
+{
+  "type": "FeatureCollection",
+  "features": [
+    {
+      "type": "Feature",
+      "properties": {
+        "name": "Example monitoring area"
+      },
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [30.0, 50.0],
+            [31.0, 50.0],
+            [31.0, 51.0],
+            [30.0, 51.0],
+            [30.0, 50.0]
+          ]
+        ]
+      }
+    }
+  ]
+}
