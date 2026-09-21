@@ -591,6 +591,77 @@ select jsonb_build_object(
 );
 $$;
 
+create or replace function public.firewatch_integrity_diagnostics()
+returns jsonb
+language plpgsql security definer
+set search_path=public,pg_temp
+as $
+declare
+  v_checks jsonb:='[]'::jsonb;
+  v_pass integer:=0;v_warn integer:=0;v_fail integer:=0;
+  n jsonb:=coalesce((select value from public.system_state where key='monitor_notification_integrity'),'{}'::jsonb);
+  c jsonb:=coalesce((select value from public.system_state where key='monitor_source_coverage'),'{}'::jsonb);
+  b jsonb:=coalesce((select value from public.system_state where key='monitor_source_baseline'),'{}'::jsonb);
+  g jsonb:=coalesce((select value from public.system_state where key='monitor_geo_integrity'),'{}'::jsonb);
+begin
+  if nullif(n->>'last_success_run','') is null then
+    v_checks:=v_checks||jsonb_build_array(jsonb_build_object('id','notification_integrity','status','warn','message','Notification Integrity has not run yet'));
+    v_warn:=v_warn+1;
+  elsif coalesce((n->>'notification_gaps')::int,0)>0 then
+    v_checks:=v_checks||jsonb_build_array(jsonb_build_object('id','notification_integrity','status','fail','message',format('%s notification gap(s) detected',n->>'notification_gaps'),'fix','Inspect notification_integrity_findings and Telegram delivery.'));
+    v_fail:=v_fail+1;
+  elsif coalesce((n->>'delivery_backlog')::int,0)>0 then
+    v_checks:=v_checks||jsonb_build_array(jsonb_build_object('id','notification_integrity','status','warn','message',format('%s Telegram delivery backlog event(s)',n->>'delivery_backlog'),'fix','Check Telegram worker and credentials.'));
+    v_warn:=v_warn+1;
+  else
+    v_checks:=v_checks||jsonb_build_array(jsonb_build_object('id','notification_integrity','status','pass','message','No notification gaps or delivery backlog'));
+    v_pass:=v_pass+1;
+  end if;
+
+  if nullif(c->>'last_success_run','') is null then
+    v_checks:=v_checks||jsonb_build_array(jsonb_build_object('id','source_coverage','status','warn','message','Source Coverage has not run yet'));
+    v_warn:=v_warn+1;
+  elsif coalesce((c->>'sources_degraded')::int,0)>0 then
+    v_checks:=v_checks||jsonb_build_array(jsonb_build_object('id','source_coverage','status','fail','message',format('%s/%s enabled source(s) degraded',c->>'sources_degraded',c->>'sources_total'),'fix','Inspect source_coverage_current.'));
+    v_fail:=v_fail+1;
+  else
+    v_checks:=v_checks||jsonb_build_array(jsonb_build_object('id','source_coverage','status','pass','message',format('%s/%s enabled source(s) active',c->>'sources_active',c->>'sources_total')));
+    v_pass:=v_pass+1;
+  end if;
+
+  if nullif(b->>'last_success_run','') is null or b->>'status'='learning' then
+    v_checks:=v_checks||jsonb_build_array(jsonb_build_object('id','source_baseline','status','warn','message','Source baseline is learning or has not run yet'));
+    v_warn:=v_warn+1;
+  elsif b->>'status'='anomaly' then
+    v_checks:=v_checks||jsonb_build_array(jsonb_build_object('id','source_baseline','status','fail','message',format('%s source baseline anomaly/anomalies',b->>'sources_anomaly'),'fix','Inspect source_coverage_anomalies.'));
+    v_fail:=v_fail+1;
+  elsif b->>'status'='watch' then
+    v_checks:=v_checks||jsonb_build_array(jsonb_build_object('id','source_baseline','status','warn','message',format('%s source(s) on baseline watch',b->>'sources_watch')));
+    v_warn:=v_warn+1;
+  else
+    v_checks:=v_checks||jsonb_build_array(jsonb_build_object('id','source_baseline','status','pass','message','Source baseline normal'));
+    v_pass:=v_pass+1;
+  end if;
+
+  if nullif(g->>'last_success_run','') is null then
+    v_checks:=v_checks||jsonb_build_array(jsonb_build_object('id','geo_integrity','status','warn','message','Geographic Integrity has not run yet'));
+    v_warn:=v_warn+1;
+  elsif coalesce((g->>'missing_in_db')::int,0)>0 then
+    v_checks:=v_checks||jsonb_build_array(jsonb_build_object('id','geo_integrity','status','fail','message',format('%s FIRMS record(s) inside AOI missing from DB',g->>'missing_in_db'),'fix','Inspect geo_integrity_source_current and ingestion logs.'));
+    v_fail:=v_fail+1;
+  else
+    v_checks:=v_checks||jsonb_build_array(jsonb_build_object('id','geo_integrity','status','pass','message',format('API %s → AOI %s → DB %s; missing 0',g->>'api_recent',g->>'inside_aoi',g->>'db_matched')));
+    v_pass:=v_pass+1;
+  end if;
+
+  return jsonb_build_object(
+    'status',case when v_fail>0 then 'fail' when v_warn>0 then 'warn' else 'pass' end,
+    'summary',jsonb_build_object('pass',v_pass,'warn',v_warn,'fail',v_fail),
+    'checks',v_checks,
+    'notification_integrity',n,'source_coverage',c,'source_baseline',b,'geo_integrity',g
+  );
+end $;
+
 revoke execute on function public.firewatch_notification_integrity_refresh() from public,anon,authenticated;
 revoke execute on function public.firewatch_notification_integrity_summary() from public,anon,authenticated;
 revoke execute on function public.firewatch_source_coverage_refresh() from public,anon,authenticated;
@@ -599,6 +670,7 @@ revoke execute on function public.firewatch_source_baseline_refresh() from publi
 revoke execute on function public.firewatch_source_baseline_summary() from public,anon,authenticated;
 revoke execute on function public.firewatch_geo_integrity_refresh(jsonb) from public,anon,authenticated;
 revoke execute on function public.firewatch_geo_integrity_summary() from public,anon,authenticated;
+revoke execute on function public.firewatch_integrity_diagnostics() from public,anon,authenticated;
 
 grant execute on function public.firewatch_notification_integrity_refresh() to service_role;
 grant execute on function public.firewatch_notification_integrity_summary() to service_role;
@@ -608,6 +680,7 @@ grant execute on function public.firewatch_source_baseline_refresh() to service_
 grant execute on function public.firewatch_source_baseline_summary() to service_role;
 grant execute on function public.firewatch_geo_integrity_refresh(jsonb) to service_role;
 grant execute on function public.firewatch_geo_integrity_summary() to service_role;
+grant execute on function public.firewatch_integrity_diagnostics() to service_role;
 
 do $$
 declare j record;
