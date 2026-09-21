@@ -1,54 +1,45 @@
 # Keys and secrets
 
-FIRMSGeoTools intentionally separates **required Core secrets** from **optional module credentials**.
+FIRMSGeoTools separates local installer values, Edge Function secrets and database-internal secrets.
 
-## Core
+## Required Core values
 
-| Variable | Required | Where to obtain | Where stored |
-|---|---|---|---|
+| Variable | Required | Obtain from | Storage after install |
+|---|---:|---|---|
+| SUPABASE_PROJECT_REF | yes | Supabase project URL | local installer only |
 | FIRMS_MAP_KEY | yes | NASA FIRMS API | Supabase Edge secret |
 | TELEGRAM_BOT_TOKEN | yes | BotFather | Supabase Edge secret |
-| TELEGRAM_CHAT_ID | yes | Telegram channel/group | Supabase Edge secret |
-| FIREWATCH_CRON_SECRET | yes | generate locally | Supabase Vault / installer |
-| TELEGRAM_ADMIN_WEBHOOK_SECRET | yes for admin | generate locally | Supabase Vault / installer |
-| TELEGRAM_ADMIN_CHAT_ID | optional at first | your Telegram admin account/chat | database pairing state |
+| TELEGRAM_CHAT_ID | yes | Telegram destination | Supabase Edge secret |
+| INSTALL_TOKEN | yes during setup | generate locally | Supabase Edge secret |
+
+## Automatically generated
+
+### firewatch_cron_secret
+
+The database migration generates a random cron authentication secret and stores it in **Supabase Vault**.
+
+Users do not copy it into `.env.local`.
+
+pg_cron reads it from Vault when invoking the FIRMS and Telegram Edge Functions.
 
 ## Supabase runtime values
 
 Supabase automatically provides Edge Functions with:
 
-- SUPABASE_URL
-- SUPABASE_SERVICE_ROLE_KEY
+- `SUPABASE_URL`;
+- `SUPABASE_SERVICE_ROLE_KEY`.
 
-Do not copy the service-role key into browser JavaScript, GitHub Pages or public configuration.
+Do not place the service-role key in:
 
-## Optional integrations
+- `.env.local` unless a future documented tool explicitly requires it;
+- GitHub Pages;
+- browser JavaScript;
+- public configuration;
+- committed files.
 
-### EUMETSAT LSA SAF
+## INSTALL_TOKEN
 
-- LSASAF_USERNAME
-- LSASAF_PASSWORD
-
-Required only when enabling the EUMETSAT modules.
-
-### Copernicus Data Space
-
-- CDSE_USERNAME
-- CDSE_PASSWORD
-
-Used by Sentinel modules that require authenticated catalogue/product access.
-
-### OpenAQ
-
-- OPENAQ_API_KEY
-
-Optional. The monitoring system must continue operating when OpenAQ is not configured.
-
-## Generating secrets
-
-Use a cryptographically random value of at least 32 bytes.
-
-Examples:
+Generate at least 32 random bytes.
 
 Linux/macOS:
 
@@ -64,16 +55,27 @@ $bytes = New-Object byte[] 32
 [Convert]::ToHexString($bytes).ToLower()
 ```
 
-Generate different values for cron authentication and Telegram webhook authentication.
+After setup succeeds, you may rotate/remove this secret until you need the setup endpoint again.
+
+## Optional future Full-profile credentials
+
+These variables are reserved but are not required by current Core:
+
+- `LSASAF_USERNAME`
+- `LSASAF_PASSWORD`
+- `CDSE_USERNAME`
+- `CDSE_PASSWORD`
+- `OPENAQ_API_KEY`
 
 ## Never commit
 
 Never commit:
 
 - `.env.local`;
+- Telegram bot tokens;
+- FIRMS MAP_KEY;
+- INSTALL_TOKEN;
 - service-role keys;
 - database passwords;
-- Telegram tokens;
-- private chat IDs if you consider them sensitive;
 - Supabase Vault values;
-- database dumps containing operational data.
+- production database dumps.
