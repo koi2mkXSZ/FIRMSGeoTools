@@ -50,7 +50,29 @@ Deno.serve(async(req)=>{
     const {data:cron,error:ce}=await sb.rpc("firewatch_configure_core_cron",{p_base_url:url});
     if(ce)throw ce;
 
-    return json({ok:true,geography:geo,cron,bootstrap_note:"Bootstrap completes after the first successful FIRMS ingestion."});
+    let admin:any={enabled:false};
+    const tgToken=Deno.env.get("TELEGRAM_BOT_TOKEN");
+    const adminChatId=Deno.env.get("TELEGRAM_ADMIN_CHAT_ID");
+    const adminWebhookSecret=Deno.env.get("TELEGRAM_ADMIN_WEBHOOK_SECRET");
+    if(tgToken&&adminChatId&&adminWebhookSecret){
+      const hookUrl=url+"/functions/v1/firewatch-admin";
+      const wr=await fetch(`https://api.telegram.org/bot${tgToken}/setWebhook`,{
+        method:"POST",
+        headers:{"content-type":"application/json"},
+        body:JSON.stringify({
+          url:hookUrl,
+          secret_token:adminWebhookSecret,
+          allowed_updates:["message","callback_query"],
+          drop_pending_updates:false
+        }),
+        signal:AbortSignal.timeout(20000)
+      });
+      const wj=await wr.json().catch(()=>null);
+      if(!wr.ok||!wj?.ok)throw new Error(`Telegram setWebhook failed: ${wj?.description??wr.status}`);
+      admin={enabled:true,chat_id_configured:true,webhook_url:hookUrl};
+    }
+
+    return json({ok:true,geography:geo,cron,admin,bootstrap_note:"Bootstrap completes after the first successful FIRMS ingestion."});
   }catch(e){
     return json({ok:false,error:e instanceof Error?e.message:String(e)},500);
   }
