@@ -29,3 +29,6 @@ verify_jwt = false
 
 [functions.firewatch-admin]
 verify_jwt = false
+
+[functions.firewatch-geo-integrity]
+verify_jwt = false
