@@ -78,6 +78,6 @@ Deno.serve(async(req)=>{
     });
     return json({ok:failures.length===0,selected:(events??[]).length,sent,failures});
   }finally{
-    await sb.rpc("firewatch_release_telegram_lease",{p_holder:holder}).catch(()=>null);
+    try{await sb.rpc("firewatch_release_telegram_lease",{p_holder:holder})}catch{}
   }
 });
