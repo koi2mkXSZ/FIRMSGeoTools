@@ -60,7 +60,9 @@ Stage 42.5 synchronizes both copies to prevent the drift discovered during imple
 - Response: `cached=true`, `status=active`, coverage 6/6.
 - Area payload contains resolved entities, profile provenance and one confirmed official registry hit.
 - FIRMSGeoTools Clean Install CI passed on the Stage 42.5 API/UI commit.
-- Production `GeoWatch-Dashboard` Pages deployment is required to pass before closing the stage.
+- Production `GeoWatch-Dashboard` Pages deployment `36007753284` passed successfully.
+- Production Dashboard inline JavaScript passed syntax validation after deployment.
+- Signed `action=intel` smoke returned HTTP 200; unsigned Dashboard API request returned HTTP 401.
 
 ## Security
 
@@ -69,3 +71,11 @@ The dashboard remains read-only and HMAC-link protected.
 `firewatch-area-report` is not exposed by weakening its authorization. `firewatch-dashboard` performs the internal authenticated call after validating the signed Dashboard URL.
 
 No service-role key, Vault secret or internal database credential is sent to browser JavaScript.
+
+## Status
+
+**CLOSED / production-ready — 2026-09-24.**
+
+Production Dashboard commit: `18542c0c43c4afac704344794c2fc115c33ee308`.
+
+FIRMSGeoTools recovery/source synchronization: `23685887d13db78684615ce6bdac5d1c1b2bc6bb`, documentation acceptance: `cc1a7ffbf7e7a52bffa00d7fb968d8fb3cd2fb2a` and follow-up close commit.
