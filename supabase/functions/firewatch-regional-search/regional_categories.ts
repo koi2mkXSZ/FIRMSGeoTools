@@ -195,7 +195,7 @@ export function extractRegionalFilters(v:unknown){
  const filters:RegionalFilters={};
  const re=/(^|\s)(city|town|settlement|город|місто|населенный|населений|addr|address|адрес|адреса|brand|бренд|operator|оператор|source|src|источник|джерело|confidence|conf|min_confidence|уверенность|впевненість|has_address|addressed|с_адресом|з_адресою)\s*:\s*("(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|[^\s+]+)/giu;
  text=text.replace(re,(m,prefix,key,value)=>{
-  const mapped=FILTER_ALIASES[norm(key)],clean=safeFilterValue(value);
+  const nk=norm(key),mapped=FILTER_ALIASES[nk]??FILTER_ALIASES[nk.replace(/\s+/g,"_")],clean=safeFilterValue(value);
   if(mapped&&clean)filters[mapped]=clean;
   return prefix?" ":"";
  }).replace(/\s+/g," ").replace(/\s*\+\s*/g," + ").trim();
