@@ -9,7 +9,7 @@ const EPOCH=2025;
 const MAX_RADIUS_M=10000;
 const MOVE_REQUERY_M=750;
 const MAX_EVENTS=10;
-const MAX_REFRESH=2;
+const MAX_REFRESH=6;
 
 type Product="POP"|"BUILT";
 type TileRef={r:number,c:number};
