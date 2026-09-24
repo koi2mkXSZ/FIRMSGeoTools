@@ -59,9 +59,9 @@ Deno.serve(async(req:Request)=>{
   // Historical product metadata is preserved in the database for audit, but no new EUMETSAT requests are made.
 
   await sb.from("rainviewer_frames").delete().lt("frame_time",new Date(Date.now()-14*86400_000).toISOString());
-  await sb.from("eumetsat_li_products").delete().lt("sensing_end",new Date(Date.now()-14*86400_000).toISOString());
+  // Historical EUMETSAT LI rows are retained for audit; this function no longer reads/writes/purges LI products.
 
-  const [{data:events,error:ee},{data:frames,error:fe},{data:products,error:pe}]=await Promise.all([
+  const [{data:events,error:ee},{data:frames,error:fe}]=await Promise.all([
     sb.from("fire_events").select("id,first_seen,last_seen,best_latitude,best_longitude,last_latitude,last_longitude,priority_score").gte("first_seen",new Date(Date.now()-EVENT_HOURS*3600_000).toISOString()).order("priority_score",{ascending:false,nullsFirst:false}).order("first_seen",{ascending:false}).limit(60),
     sb.from("rainviewer_frames").select("frame_time,host,path").gte("frame_time",new Date(Date.now()-14*86400_000).toISOString()).order("frame_time")
   ]);
