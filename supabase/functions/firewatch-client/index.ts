@@ -22,6 +22,7 @@ const activeKeyboard={
     [{text:"📊 Статистика"},{text:"📈 Аналитика"}],
     [{text:"🚦 Приоритет"},{text:"🧠 Deep OSINT"}],
     [{text:"📑 Досье"},{text:"🗺 Гео/инфра"}],
+    [{text:"🧭 Area OSINT"},{text:"🛰 Satellite"}],
     [{text:"👤 Мой доступ"}]
   ],
   resize_keyboard:true
@@ -480,6 +481,10 @@ function geoText(g:any){
   return out.join("\n").slice(0,3900);
 }
 
+async function historyNearby(sb:any,lat:number,lon:number,radiusM:number){
+  const {data,error}=await sb.rpc("find_hotspot_history_nearby",{p_lat:lat,p_lon:lon,p_radius_m:radiusM,p_days:365,p_limit:20});
+  if(error)throw error;return data??[];
+}
 function historyText(rows:any[],lat:number,lon:number,radiusM:number){
   const out=["🕘 История тепловых аномалий",
     "Точка: "+lat.toFixed(5)+", "+lon.toFixed(5),
@@ -527,6 +532,168 @@ async function bootstrapWebhook(sb:any,token:string,secret:string,url:string){
     last_error_message:info?.last_error_message??null,
     max_connections:Number(info?.max_connections??0)
   };
+}
+
+async function areaIntelRequest(payload:any){
+  const u=Deno.env.get("SUPABASE_URL"),k=Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
+  if(!u||!k)throw new Error("missing Supabase env");
+  const r=await fetch(u+"/functions/v1/firewatch-area-intel",{
+    method:"POST",headers:{"content-type":"application/json","authorization":"Bearer "+k},
+    body:JSON.stringify(payload),signal:AbortSignal.timeout(45000)
+  });
+  const t=await r.text();let d:any;try{d=JSON.parse(t)}catch{throw new Error("Area Intel invalid response")}
+  if(!r.ok||!d?.ok)throw new Error(String(d?.error??("HTTP "+r.status)));return d;
+}
+function areaIntelText(d:any){
+  const s=d?.summary??{},counts=s.by_category??{},b=d?.buildings??{},near=d?.nearest??{},src=d?.source_status??{},er=d?.entity_summary??{},erc=d?.entity_resolution??{},entities:any[]=Array.isArray(erc.entities)?erc.entities:[];
+  const labels:any={energy:"энергетика",industrial:"промышленность",government:"административные",emergency:"экстренные службы",healthcare:"медицина",education:"образование",transport:"транспорт",logistics:"логистика",water:"вода",telecom:"телеком",commercial:"коммерция",residential:"жилые",cultural:"культура",public_service:"общественные службы",storage:"хранение"};
+  const order=["energy","industrial","government","emergency","healthcare","education","transport","logistics","water","telecom","commercial","residential","cultural","public_service","storage"];
+  const lines=[
+    "🧭 AREA OSINT",
+    "Центр: "+Number(d.latitude).toFixed(5)+", "+Number(d.longitude).toFixed(5)+" • радиус "+Number(d.radius_m)+" м",
+    "OSM/Postpass: "+String(src.osm_postpass??"—")+" • Overture: "+String(src.overture??"—")+(src.overture_mirror_lag?" • mirror lag":""),
+    "",
+    "🏗 Инфраструктурный профиль"
+  ];
+  for(const k of order)if(Number(counts[k]??0)>0)lines.push("• "+(labels[k]??k)+": "+Number(counts[k]));
+  lines.push("• building footprints: "+Number(b.building_count??0)+" • именованных "+Number(b.named_count??0)+" • non-residential tagged "+Number(b.nonresidential_tagged_count??0));
+  lines.push("","🔗 Entity resolution");
+  lines.push("• entities: "+Number(er.entities??0)+" • multi-source "+Number(er.multi_source??0)+" • Wikidata "+Number(er.wikidata_entities??0));
+  lines.push("• exact QID: "+Number(er.exact_qid??0)+" • probable "+Number(er.probable??0)+" • review "+Number(er.pending_proposals??0));
+  if(src.wikidata)lines.push("• Wikidata: "+String(src.wikidata)+" • "+String(src.wikidata_transport??"—"));
+  const multi=entities.filter((x:any)=>Number(x.source_count??0)>1).slice(0,6);
+  for(const x of multi)lines.push("  ↳ "+String(x.canonical_name??"—")+" • "+Number(x.source_count??0)+" sources"+(x.wikidata_qid?" • "+String(x.wikidata_qid):"")+" • "+String(x.resolution_status??""));
+  lines.push("","📍 Ближайшие объекты");
+  for(const k of order){const x=near[k];if(!x)continue;lines.push("• "+(labels[k]??k)+": "+String(x.name??"—")+" • "+Math.round(Number(x.distance_m??0))+" м"+(x.subcategory?" • "+String(x.subcategory):""))}
+  const ov:any[]=Array.isArray(s.overture_features)?s.overture_features:[];
+  if(ov.length){
+    lines.push("","🗺 Overture cross-source:");
+    for(const x of ov.slice(0,5))lines.push("• "+String(x.name??x.subcategory??"—")+" • "+Math.round(Number(x.distance_m??0))+" м • "+String(x.subcategory??x.category??""));
+    lines.push("snapshot "+String(src.overture_mirror_release??"—")+" • official latest "+String(src.overture_official_latest??"—"));
+  }
+  lines.push("","Контекст описательный: без vulnerability/target/access-route scoring.");
+  return lines.join("\n").slice(0,3900);
+}
+async function clientLatencyText(sb:any,eventId?:string){
+  if(eventId?.trim()){
+    const {data,error}=await sb.rpc("firewatch_event_latency",{p_query:eventId.trim()});if(error)throw error;
+    if(!data)return "⏱ Latency\n\nСобытие не найдено.";
+    return [
+      "⏱ LATENCY #"+String(data.event_id??"").slice(0,8),
+      "Source latency: "+Number(data.source_latency_min??0).toFixed(1)+" мин",
+      "GeoWatch delivery: "+(data.delivery_latency_min==null?"—":Number(data.delivery_latency_min).toFixed(1)+" мин"),
+      "End-to-end: "+(data.end_to_end_latency_min==null?"—":Number(data.end_to_end_latency_min).toFixed(1)+" мин"),
+      "Telegram: "+(data.telegram_sent?"sent":"not sent")
+    ].join("\n");
+  }
+  const {data,error}=await sb.rpc("firewatch_latency_health",{p_hours:24});if(error)throw error;
+  const d=data?.detections??{},v=data?.delivery??{};
+  return [
+    "⏱ SOURCE / DELIVERY LATENCY • 24h",
+    "Source p95: "+Number(d.p95_min??0).toFixed(1)+" мин • >90м "+Number(d.over_90m??0)+"/"+Number(d.count??0),
+    "Delivery p95: "+Number(v.p95_min??0).toFixed(1)+" мин • >10м "+Number(v.over_10m??0),
+    "Required unsent: "+Number(v.required_unsent??0)
+  ].join("\n");
+}
+async function clientIntegrityText(sb:any){
+  const {data,error}=await sb.rpc("firewatch_notification_integrity_summary");if(error)throw error;
+  const st=data?.state??{};
+  return [
+    "🧪 Notification Integrity",
+    "Статус: "+String(st.status??"—"),
+    "Notification gaps: "+Number(st.notification_gaps??0),
+    "Delivery backlog >45 мин: "+Number(st.delivery_backlog??0),
+    "Ошибки: "+Number(st.errors??0)+" • предупреждения: "+Number(st.warnings??0),
+    "Проверка: "+ageText(st.last_success_run)
+  ].join("\n");
+}
+async function clientCoverageText(sb:any){
+  const [{data,error},{data:base,error:be},{data:geo,error:ge}]=await Promise.all([
+    sb.rpc("firewatch_source_coverage_summary"),sb.rpc("firewatch_source_baseline_summary"),sb.rpc("firewatch_geo_integrity_summary")
+  ]);if(error)throw error;if(be)throw be;
+  const st=data?.state??{},bs=base?.state??{},gs=ge?{}:(geo?.state??{});
+  return [
+    "📡 Source Coverage",
+    "Статус: "+String(st.status??"—"),
+    "Источники: active "+Number(st.sources_active??0)+"/"+Number(st.sources_total??0)+" • degraded "+Number(st.sources_degraded??0),
+    "Baseline: "+String(bs.status??"—")+" • learning "+Number(bs.sources_learning??0)+" • watch "+Number(bs.sources_watch??0)+" • anomaly "+Number(bs.sources_anomaly??0),
+    ge?"Geo integrity: недоступен":"Geo integrity: "+String(gs.status??"—")+" • API "+Number(gs.api_recent??0)+" → DB "+Number(gs.db_matched??0)+" • missing "+Number(gs.missing_in_db??0),
+    "Проверка: "+ageText(st.last_success_run)
+  ].join("\n");
+}
+async function clientOsintText(sb:any,q:string){
+  const {data,error}=await sb.rpc("firewatch_osint_event_detail",{p_query:q.trim()});if(error)throw error;if(!data)return "OSINT: событие не найдено.";
+  const rows:any[]=Array.isArray(data.evidence)?data.evidence:[];
+  const lines=["🔎 OSINT #"+String(data.id??"").slice(0,8),"Область: "+String(data.oblast??"—"),"Независимых источников: "+Number(data.source_count??0)+" • записей: "+Number(data.evidence_count??0),""];
+  if(!rows.length)lines.push("Связанных публичных OSINT-событий в текущем окне не найдено.");
+  else for(const x of rows.slice(0,8))lines.push("• ["+String(x.source??"source")+"] "+String(x.title??x.category??"").replace(/\s+/g," ").slice(0,180)+(x.distance_km!=null?" • "+Number(x.distance_km).toFixed(1)+" км":""));
+  lines.push("","Контекстная корреляция не доказывает причинную связь.");
+  return lines.join("\n").slice(0,3900);
+}
+async function clientGroundText(sb:any,q:string){
+  const {data,error}=await sb.rpc("firewatch_ground_context",{p_query:q.trim()});if(error)throw error;if(!data)return "Ground OSINT: событие не найдено.";
+  const rows:any[]=Array.isArray(data.measurements)?data.measurements:[];
+  const lines=["🌫 Ground OSINT #"+String(data.id??"").slice(0,8),"Станций: "+Number(data.station_count??0)+" • источников: "+Number(data.source_count??0),""];
+  if(!rows.length)lines.push("Подходящих наземных измерений в текущем пространственно-временном окне не найдено.");
+  else for(const x of rows.slice(0,10))lines.push("• "+String(x.station_name??x.station_id??"—")+" • "+String(x.parameter??"—")+": "+String(x.value??"—")+(x.unit?" "+String(x.unit):"")+(x.distance_km!=null?" • "+Number(x.distance_km).toFixed(1)+" км":""));
+  lines.push("","Наземные измерения — независимый экологический контекст.");
+  return lines.join("\n").slice(0,3900);
+}
+async function clientSatelliteText(sb:any,q:string){
+  const {data,error}=await sb.rpc("firewatch_satellite_evidence",{p_query:q.trim()});if(error)throw error;if(!data)return "Satellite Evidence: событие не найдено.";
+  const b=data.before??null,a=data.after??null;
+  const scene=(label:string,x:any)=>x?label+": "+String(x.datetime??"").slice(0,16).replace("T"," ")+" UTC • cloud "+Number(x.cloud_pct??0).toFixed(1)+"%":"";
+  return [
+    "🛰 Satellite Surface Evidence #"+String(data.event_id??"").slice(0,8),
+    "Статус: "+String(data.status??"pending"),
+    scene("До",b),scene("После",a),
+    data.dnbr!=null?"dNBR: "+Number(data.dnbr).toFixed(3):null,
+    data.dndvi!=null?"ΔNDVI: "+Number(data.dndvi).toFixed(3):null,
+    "Visual: "+String(data.visual?.status??"pending"),
+    "",
+    "Спектральное изменение поверхности не устанавливает причину события."
+  ].filter(Boolean).join("\n").slice(0,3900);
+}
+async function clientReportText(sb:any,q:string){
+  const {data,error}=await sb.rpc("firewatch_report_status",{p_query:q.trim()});if(error)throw error;if(!data)return "Report: событие не найдено.";
+  const classes=Array.isArray(data.evidence_classes)?data.evidence_classes.join(", "):"—";
+  return [
+    "📋 EVENT EVIDENCE REPORT #"+String(data.event_id??"").slice(0,8),
+    "Статус: "+(data.available?"готов":"ещё не сформирован"),
+    "Coverage: "+Number(data.coverage_available??0)+"/"+Number(data.coverage_expected??0),
+    "Классы: "+classes,
+    "Generated: "+String(data.generated_at??"—")
+  ].join("\n");
+}
+async function clientSourcesText(sb:any){
+  const [{data:s,error},{data:cat,error:ce}]=await Promise.all([
+    sb.rpc("firewatch_admin_snapshot"),
+    sb.from("osint_source_catalog").select("source_key,label,source_class,enabled").eq("enabled",true).order("source_key")
+  ]);
+  if(error)throw error;if(ce)throw ce;
+  const rows:any[]=cat??[];
+  return [
+    "📡 Источники GeoWatch",
+    "FIRMS NOAA: "+ageText(s?.monitor?.last_success_run),
+    "MODIS: "+ageText(s?.monitor_modis?.last_success_run),
+    "Suomi NPP: "+ageText(s?.monitor_snpp?.last_success_run),
+    "OSINT catalog active: "+rows.length,
+    "",
+    ...rows.slice(0,24).map((x:any)=>"• "+String(x.label??x.source_key)+" • "+String(x.source_class??"—"))
+  ].join("\n").slice(0,3900);
+}
+async function clientArchiveText(sb:any){
+  const {data:s,error}=await sb.rpc("firewatch_admin_snapshot");if(error)throw error;
+  const h=s?.history_backfill??{},db=Number(s?.database_size_bytes??0);
+  return [
+    "🗄 Архив и база",
+    "365-дневный backfill: "+(h.done?"✅ завершён":"⏳ выполняется"),
+    "Обработано дней: "+Number(h.processed_days??0),
+    "Агрегатных ячеек: "+Number(h.upserted_cells??0),
+    "Размер базы: "+(db/1024/1024).toFixed(1)+" МБ",
+    "Raw detections retention: 90 дней",
+    "Compact archive: rolling 365 дней"
+  ].join("\n");
 }
 
 Deno.serve(async(req:Request)=>{
@@ -668,7 +835,7 @@ Deno.serve(async(req:Request)=>{
     }
 
     if(low==="🔎 поиск"){
-      await tg(token,"sendMessage",{chat_id:chatId,text:["🔎 Поиск","","По ID:","/search aee43b0d","","По региону:","/search Київська","","По координатам и радиусу:","/nearby 50.4501 30.5234 25","/nearby 50.4501, 30.5234, 25","/nearby 50.4501; 30.5234; 25","","История до 365 дней:","/history 50.4501 30.5234 5","","Координаты вводятся вручную. Передача геопозиции Telegram отключена."].join("\n"),reply_markup:activeKeyboard});
+      await tg(token,"sendMessage",{chat_id:chatId,text:["🔎 Поиск","","По ID:","/search aee43b0d","","По региону:","/search Київська","","По координатам и радиусу:","/nearby 50.4501 30.5234 25","/nearby 50.4501, 30.5234, 25","/nearby 50.4501; 30.5234; 25","","История до 365 дней:","/history 50.4501 30.5234 5","","Area OSINT:","/area 46.61212 31.55511 2000","/infra 19be809d 2000","","OSINT layers:","/osint 19be809d","/ground 19be809d","/satellite 19be809d","/latency 19be809d","","System read-only:","/events • /sources • /coverage • /integrity • /archive","","Координаты вводятся вручную. Передача геопозиции Telegram отключена."].join("\n"),reply_markup:activeKeyboard});
       return json({ok:true,processed:1});
     }
 
@@ -806,6 +973,54 @@ Deno.serve(async(req:Request)=>{
       await tg(token,"sendMessage",{chat_id:chatId,text:geoText(g),reply_markup:activeKeyboard});
       return json({ok:true,processed:1});
     }
+
+    if(low==="🧭 area osint"){
+      await tg(token,"sendMessage",{chat_id:chatId,text:"🧭 Area OSINT\n\nПо событию:\n/infra <event-id> [radius_m]\n\nПо координатам:\n/area <lat> <lon> [radius_m]\n\nПример:\n/area 46.61212 31.55511 2000",reply_markup:activeKeyboard});
+      return json({ok:true,processed:1});
+    }
+    if(low==="🛰 satellite"){
+      await tg(token,"sendMessage",{chat_id:chatId,text:"🛰 Satellite Evidence\n\nУкажите ID события:\n/satellite 19be809d",reply_markup:activeKeyboard});
+      return json({ok:true,processed:1});
+    }
+    if(low.startsWith("/infra")){
+      const p=raw.split(/\s+/),id=String(p[1]??"").trim(),radius=Math.max(250,Math.min(10000,Number(p[2]??2000)||2000));
+      if(!id){await tg(token,"sendMessage",{chat_id:chatId,text:"Использование: /infra <event-id> [radius_m]",reply_markup:activeKeyboard});return json({ok:true,processed:1})}
+      const d=await areaIntelRequest({event_id:id,radius_m:radius});await countRequest(sb,userId);
+      await tg(token,"sendMessage",{chat_id:chatId,text:areaIntelText(d),reply_markup:activeKeyboard,disable_web_page_preview:true});
+      return json({ok:true,processed:1});
+    }
+    if(low.startsWith("/area")){
+      const p=raw.split(/\s+/),lat=Number(p[1]),lon=Number(p[2]),radius=Math.max(250,Math.min(10000,Number(p[3]??2000)||2000));
+      if(!Number.isFinite(lat)||!Number.isFinite(lon)){await tg(token,"sendMessage",{chat_id:chatId,text:"Использование: /area <lat> <lon> [radius_m]",reply_markup:activeKeyboard});return json({ok:true,processed:1})}
+      const d=await areaIntelRequest({lat,lon,radius_m:radius});await countRequest(sb,userId);
+      await tg(token,"sendMessage",{chat_id:chatId,text:areaIntelText(d),reply_markup:activeKeyboard,disable_web_page_preview:true});
+      return json({ok:true,processed:1});
+    }
+    if(low.startsWith("/latency")){
+      const q=raw.split(/\s+/).slice(1).join(" ").trim();await countRequest(sb,userId);
+      await tg(token,"sendMessage",{chat_id:chatId,text:await clientLatencyText(sb,q||undefined),reply_markup:activeKeyboard});return json({ok:true,processed:1});
+    }
+    if(low.startsWith("/integrity")){await countRequest(sb,userId);await tg(token,"sendMessage",{chat_id:chatId,text:await clientIntegrityText(sb),reply_markup:activeKeyboard});return json({ok:true,processed:1});}
+    if(low.startsWith("/coverage")){await countRequest(sb,userId);await tg(token,"sendMessage",{chat_id:chatId,text:await clientCoverageText(sb),reply_markup:activeKeyboard});return json({ok:true,processed:1});}
+    if(low.startsWith("/osint")){
+      const q=raw.split(/\s+/).slice(1).join(" ").trim();if(!q){await tg(token,"sendMessage",{chat_id:chatId,text:"Использование: /osint <event-id>",reply_markup:activeKeyboard});return json({ok:true,processed:1})}
+      await countRequest(sb,userId);await tg(token,"sendMessage",{chat_id:chatId,text:await clientOsintText(sb,q),reply_markup:activeKeyboard,disable_web_page_preview:true});return json({ok:true,processed:1});
+    }
+    if(low.startsWith("/ground")){
+      const q=raw.split(/\s+/).slice(1).join(" ").trim();if(!q){await tg(token,"sendMessage",{chat_id:chatId,text:"Использование: /ground <event-id>",reply_markup:activeKeyboard});return json({ok:true,processed:1})}
+      await countRequest(sb,userId);await tg(token,"sendMessage",{chat_id:chatId,text:await clientGroundText(sb,q),reply_markup:activeKeyboard});return json({ok:true,processed:1});
+    }
+    if(low.startsWith("/satellite")){
+      const q=raw.split(/\s+/).slice(1).join(" ").trim();if(!q){await tg(token,"sendMessage",{chat_id:chatId,text:"Использование: /satellite <event-id>",reply_markup:activeKeyboard});return json({ok:true,processed:1})}
+      await countRequest(sb,userId);await tg(token,"sendMessage",{chat_id:chatId,text:await clientSatelliteText(sb,q),reply_markup:activeKeyboard,disable_web_page_preview:true});return json({ok:true,processed:1});
+    }
+    if(low.startsWith("/report")){
+      const q=raw.split(/\s+/).slice(1).join(" ").trim();if(!q){await tg(token,"sendMessage",{chat_id:chatId,text:"Использование: /report <event-id>",reply_markup:activeKeyboard});return json({ok:true,processed:1})}
+      await countRequest(sb,userId);await tg(token,"sendMessage",{chat_id:chatId,text:await clientReportText(sb,q),reply_markup:activeKeyboard});return json({ok:true,processed:1});
+    }
+    if(low==="/events"){const d=await searchEvents(sb,{limit:8});await countRequest(sb,userId);await tg(token,"sendMessage",{chat_id:chatId,text:searchText(d,"🔥 Последние события"),reply_markup:activeKeyboard});return json({ok:true,processed:1});}
+    if(low==="/sources"){await countRequest(sb,userId);await tg(token,"sendMessage",{chat_id:chatId,text:await clientSourcesText(sb),reply_markup:activeKeyboard});return json({ok:true,processed:1});}
+    if(low==="/archive"){await countRequest(sb,userId);await tg(token,"sendMessage",{chat_id:chatId,text:await clientArchiveText(sb),reply_markup:activeKeyboard});return json({ok:true,processed:1});}
 
     await tg(token,"sendMessage",{
       chat_id:chatId,
