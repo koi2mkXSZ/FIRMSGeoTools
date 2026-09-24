@@ -737,6 +737,8 @@ function areaReportText(d:any){
   lines.push("","/entity <ID|QID> — карточка объекта","/registry <ID|QID> — официальный/реестровый контекст","Пространственная близость не доказывает причинную связь или operational significance.");
   return lines.join("\n").slice(0,3900);
 }
+function regionalErrorText(e:any){const m=e instanceof Error?e.message:String(e);if(/oblast not found/i.test(m))return "⚠️ Область не распознана.\n\nПример: /objects Киевская область АЗС\nТакже поддерживаются украинские и английские названия.";if(/unsupported category/i.test(m))return "⚠️ Категория не поддерживается.\n\nДоступно: АЗС, больницы, аптеки, школы, пожарные части, полиция, энергетика, промышленность, склады, супермаркеты, телеком, транспорт.";return "⚠️ Региональный поиск временно не выполнен.\n"+m.slice(0,240)}
+
 async function areaIntelRequest(payload:any){
   const u=Deno.env.get("SUPABASE_URL"),k=Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
   if(!u||!k)throw new Error("missing Supabase env");
@@ -1105,13 +1107,19 @@ async function processAdminUpdate(sb:any,token:string,adminId:string,u:any){
   if(low.startsWith("/objects_csv")){
     const q=raw.split(/\s+/).slice(1).join(" ").trim(),p=parseRegionalArgs(q);
     if(!p){await tg(token,"sendMessage",{chat_id:adminId,text:"Использование: /objects_csv <область> <категория>\nПример: /objects_csv Полтавская область АЗС",reply_markup:panelKeyboard});return true}
-    const d=await regionalSearchRequest(p),csv=regionalCsv(d),name=String(d?.oblast?.code??d?.oblast_code??"region")+"-"+String(d?.category_key??p.category)+".csv";
-    await tgTextDocument(token,adminId,csv,name,"GeoWatch • "+String(d?.oblast?.name_uk??d?.oblast_name??p.oblast)+" • "+String(d?.category_label??p.category)+" • "+Number(d?.summary?.resolved_objects??0)+" объектов");return true
+    try{
+      const d=await regionalSearchRequest(p),csv=regionalCsv(d),name=String(d?.oblast?.code??d?.oblast_code??"region")+"-"+String(d?.category_key??p.category)+".csv";
+      await tgTextDocument(token,adminId,csv,name,"GeoWatch • "+String(d?.oblast?.name_uk??d?.oblast_name??p.oblast)+" • "+String(d?.category_label??p.category)+" • "+Number(d?.summary?.resolved_objects??0)+" объектов");
+    }catch(e){console.error("admin regional csv failed:",e instanceof Error?e.message:String(e));await tg(token,"sendMessage",{chat_id:adminId,text:regionalErrorText(e),reply_markup:panelKeyboard})}
+    return true
   }
   if(low.startsWith("/objects")){
     const q=raw.split(/\s+/).slice(1).join(" ").trim(),p=parseRegionalArgs(q);
     if(!p){await tg(token,"sendMessage",{chat_id:adminId,text:"Использование: /objects <область> <категория>\nПример: /objects Полтавская область АЗС",reply_markup:panelKeyboard});return true}
-    const d=await regionalSearchRequest(p);await tg(token,"sendMessage",{chat_id:adminId,text:regionalSearchText(d),reply_markup:panelKeyboard,disable_web_page_preview:true});return true
+    try{
+      const d=await regionalSearchRequest(p);await tg(token,"sendMessage",{chat_id:adminId,text:regionalSearchText(d),reply_markup:panelKeyboard,disable_web_page_preview:true});
+    }catch(e){console.error("admin regional search failed:",e instanceof Error?e.message:String(e));await tg(token,"sendMessage",{chat_id:adminId,text:regionalErrorText(e),reply_markup:panelKeyboard})}
+    return true
   }
   if(low.startsWith("/infra")){
     const p=raw.split(/\s+/),id=String(p[1]??"").trim(),radius=Math.max(250,Math.min(10000,Number(p[2]??2000)||2000));
