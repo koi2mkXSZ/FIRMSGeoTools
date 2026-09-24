@@ -1121,7 +1121,7 @@ async function processAdminUpdate(sb:any,token:string,adminId:string,u:any){
   }
   if(low.startsWith("/objects_csv")){
     const q=raw.split(/\s+/).slice(1).join(" ").trim(),p=parseRegionalArgs(q);
-    if(!p){await tg(token,"sendMessage",{chat_id:adminId,text:"Использование: /objects_csv <область> <категория>\nПример: /objects_csv Полтавская область АЗС",reply_markup:panelKeyboard});return true}
+    if(!p){await tg(token,"sendMessage",{chat_id:adminId,text:"Использование: /objects_csv <область> <объект/категория>\nПример: /objects_csv Полтавская область АЗС",reply_markup:panelKeyboard});return true}
     try{
       const d=await regionalSearchRequest(p),csv=regionalCsv(d),name=String(d?.oblast?.code??d?.oblast_code??"region")+"-"+String(d?.category_key??"objects")+".csv";
       await tgTextDocument(token,adminId,csv,name,"GeoWatch • "+String(d?.oblast?.name_uk??d?.oblast_name??q)+" • "+String(d?.category_label??d?.category_key??"objects")+" • "+Number(d?.summary?.resolved_objects??0)+" объектов");
@@ -1130,7 +1130,7 @@ async function processAdminUpdate(sb:any,token:string,adminId:string,u:any){
   }
   if(low.startsWith("/objects")){
     const q=raw.split(/\s+/).slice(1).join(" ").trim(),p=parseRegionalArgs(q);
-    if(!p){await tg(token,"sendMessage",{chat_id:adminId,text:"Использование: /objects <область> <категория>\nПример: /objects Полтавская область АЗС",reply_markup:panelKeyboard});return true}
+    if(!p){await tg(token,"sendMessage",{chat_id:adminId,text:"Использование: /objects <область> <объект/категория>\nПример: /objects Полтавская область АЗС",reply_markup:panelKeyboard});return true}
     try{
       const d=await regionalSearchRequest(p);await tg(token,"sendMessage",{chat_id:adminId,text:regionalSearchText(d),reply_markup:panelKeyboard,disable_web_page_preview:true});
     }catch(e){console.error("admin regional search failed:",e instanceof Error?e.message:String(e));await tg(token,"sendMessage",{chat_id:adminId,text:regionalErrorText(e),reply_markup:panelKeyboard})}
