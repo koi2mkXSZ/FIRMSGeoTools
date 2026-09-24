@@ -579,9 +579,14 @@ Unrelated watchdog issues may still be reported independently by other GeoWatch 
 ### Production versions
 
 - `firewatch-regional-search`: ACTIVE v12;
-- `firewatch-client`: ACTIVE v45;
-- `firewatch-admin`: ACTIVE v90;
+- `firewatch-client`: ACTIVE v46;
+- `firewatch-admin`: ACTIVE v91;
 - `firewatch-watchdog`: ACTIVE v39.
+
+Webhook acceptance after final bot deploy:
+
+- client bootstrap: HTTP 200, webhook enabled, pending updates 0, last error null;
+- admin health: HTTP 200, webhook enabled, pending updates 0, last error null.
 
 ### Status
 
