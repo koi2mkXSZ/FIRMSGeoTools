@@ -20,8 +20,8 @@ const activeKeyboard={
   keyboard:[
     [{text:"🔥 Последние события"},{text:"🔎 Поиск"}],
     [{text:"📊 Статистика"},{text:"📈 Аналитика"}],
-    [{text:"🚦 Приоритет"},{text:"📑 Досье"}],
-    [{text:"🗺 Гео/инфра"}],
+    [{text:"🚦 Приоритет"},{text:"🧠 Deep OSINT"}],
+    [{text:"📑 Досье"},{text:"🗺 Гео/инфра"}],
     [{text:"👤 Мой доступ"}]
   ],
   resize_keyboard:true
@@ -90,6 +90,41 @@ async function analytics(sb:any,hours:number){
   const {data,error}=await sb.rpc("firewatch_analytics_summary",{p_hours:hours});
   if(error)throw error;
   return data??{};
+}
+async function deepOsint(sb:any,q:string){
+  const {data,error}=await sb.rpc("firewatch_deep_osint",{p_query:q})
+    .abortSignal(AbortSignal.timeout(7000));
+  if(error)throw error;
+  return data;
+}
+function deepOsintText(d:any){
+  if(!d)return "🧠 Deep OSINT\n\nСобытие не найдено.";
+  const e=d.event??{},s=d.summary??{},src:any[]=Array.isArray(d.sources)?d.sources:[],tl:any[]=Array.isArray(d.timeline)?d.timeline:[];
+  const lines=[
+    "🧠 DEEP OSINT #"+String(e.id??"").slice(0,8),
+    "Приоритет: "+Number(e.priority_score??0)+"/100 • "+String(e.priority_level??"—"),
+    "Уверенность детекции: "+String(e.confidence_level??"—"),
+    "Независимые strong providers: "+Number(s.strong_independent_providers??0),
+    "Классы источников: "+Number(s.strong_source_classes??0),
+    "Corroboration: "+String(s.corroboration_level??"none"),
+    "Fusion docs: "+Number(s.fusion_documents??0)+" • public OSINT: "+Number(s.public_osint??0)+" • legacy: "+Number(s.legacy_external??0),
+    ""
+  ];
+  if(src.length){
+    lines.push("Источники Fusion:");
+    for(const x of src.slice(0,8))lines.push("• "+String(x.label??x.source)+" • "+String(x.source_class??"—")+" • max "+Number(x.max_relevance??0)+"/100 • "+Number(x.evidence_count??0)+" evidence");
+    lines.push("");
+  }
+  lines.push("Timeline:");
+  for(const x of tl.slice(0,12)){
+    const dist=x.distance_m==null?"":(" • "+(Number(x.distance_m)<1000?Math.round(Number(x.distance_m))+" м":(Number(x.distance_m)/1000).toFixed(1)+" км"));
+    const when=x.observed_at?String(x.observed_at).slice(0,16).replace("T"," ")+" UTC":"—";
+    lines.push("• ["+String(x.source_label??x.source??"source")+"] "+String(x.title??"—").replace(/\s+/g," ").slice(0,180));
+    lines.push("  "+when+" • relevance "+Number(x.relevance_score??0)+"/100"+dist);
+  }
+  if(!tl.length)lines.push("Пока нет связанных OSINT-документов.");
+  lines.push("","Корреляция контекстная: близость по времени/месту/тексту не доказывает причинность.");
+  return lines.join("\n").slice(0,3900);
 }
 async function priorityEvents(sb:any,hours=24,minScore=0){
   const {data,error}=await sb.rpc("firewatch_priority_events",{p_hours:hours,p_limit:12,p_min_score:minScore})
@@ -360,6 +395,7 @@ async function bootstrapWebhook(sb:any,token:string,secret:string,url:string){
     {command:"search",description:"Поиск по ID или региону"},
     {command:"event",description:"Карточка события"},
     {command:"dossier",description:"OSINT-досье события"},
+    {command:"deeposint",description:"Глубокая OSINT-корреляция"},
     {command:"geo",description:"Гео/инфраструктура события"},
     {command:"nearby",description:"События рядом"},
     {command:"history",description:"История вокруг точки"},
@@ -552,6 +588,23 @@ Deno.serve(async(req:Request)=>{
       const e=Array.isArray(d?.events)?d.events[0]:null;
       await countRequest(sb,userId);
       await tg(token,"sendMessage",{chat_id:chatId,text:e?"🧾 Карточка события\n\n"+fmtEvent(e):"Событие не найдено.",reply_markup:activeKeyboard});
+      return json({ok:true,processed:1});
+    }
+
+    if(low==="🧠 deep osint"){
+      await tg(token,"sendMessage",{chat_id:chatId,text:"🧠 Deep OSINT\n\nУкажите ID события, например:\n/deeposint aee43b0d",reply_markup:activeKeyboard});
+      return json({ok:true,processed:1});
+    }
+
+    if(low.startsWith("/deeposint")){
+      const q=raw.split(/\s+/).slice(1).join(" ").trim();
+      if(!q){
+        await tg(token,"sendMessage",{chat_id:chatId,text:"Использование: /deeposint <ID события>",reply_markup:activeKeyboard});
+        return json({ok:true,processed:1});
+      }
+      const d=await deepOsint(sb,q);
+      await countRequest(sb,userId);
+      await tg(token,"sendMessage",{chat_id:chatId,text:deepOsintText(d),reply_markup:activeKeyboard,disable_web_page_preview:true});
       return json({ok:true,processed:1});
     }
 

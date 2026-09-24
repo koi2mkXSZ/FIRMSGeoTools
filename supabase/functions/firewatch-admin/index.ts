@@ -408,6 +408,35 @@ async function analyticsText(sb:any,hours=24){
 }
 
 
+async function deepOsintText(sb:any,q?:string){
+  const {data,error}=await sb.rpc("firewatch_deep_osint",{p_query:q?.trim()||null})
+    .abortSignal(AbortSignal.timeout(7000));
+  if(error)throw error;
+  if(!data)return "🧠 Deep OSINT: событие не найдено.";
+  const e:any=data.event??{},s:any=data.summary??{},src:any[]=Array.isArray(data.sources)?data.sources:[],tl:any[]=Array.isArray(data.timeline)?data.timeline:[];
+  const lines=[
+    `🧠 Deep OSINT / Stage 40 #${String(e.id??"").slice(0,8)}`,
+    `Priority ${Number(e.priority_score??0)}/100 • confidence ${e.confidence_level??"—"}`,
+    `Strong providers: ${Number(s.strong_independent_providers??0)} • source classes: ${Number(s.strong_source_classes??0)} • corroboration: ${s.corroboration_level??"none"}`,
+    `Fusion ${Number(s.fusion_documents??0)} • public ${Number(s.public_osint??0)} • legacy ${Number(s.legacy_external??0)}`,
+    ""
+  ];
+  if(src.length){
+    lines.push("Fusion sources:");
+    for(const x of src.slice(0,10))lines.push(`• ${x.label??x.source} • ${x.source_class??"—"} • max ${Number(x.max_relevance??0)}/100 • evidence ${Number(x.evidence_count??0)}`);
+    lines.push("");
+  }
+  lines.push("Timeline:");
+  for(const x of tl.slice(0,16)){
+    const dist=x.distance_m==null?"":` • ${Number(x.distance_m)<1000?Math.round(Number(x.distance_m))+" м":(Number(x.distance_m)/1000).toFixed(1)+" км"}`;
+    const when=x.observed_at?String(x.observed_at).slice(0,16).replace("T"," ")+" UTC":"—";
+    lines.push(`• [${x.source_label??x.source??"source"}] ${String(x.title??"—").replace(/\s+/g," ").slice(0,170)}`);
+    lines.push(`  ${when} • relevance ${Number(x.relevance_score??0)}/100${dist}`);
+  }
+  if(!tl.length)lines.push("Пока нет связанных OSINT-документов.");
+  lines.push("","Корреляция контекстная и не устанавливает причинность или атрибуцию.");
+  return lines.join("\n").slice(0,3900);
+}
 async function priorityText(sb:any,hours=24,minScore=0){
   const h=Math.max(1,Math.min(8760,Number(hours)||24));
   const min=Math.max(0,Math.min(100,Number(minScore)||0));
@@ -724,6 +753,11 @@ async function processAdminUpdate(sb:any,token:string,adminId:string,u:any){
     await tg(token,"sendMessage",{chat_id:adminId,text:await analyticsText(sb,Number(arg)),reply_markup:panelKeyboard});
     return true;
   }
+  if(low.startsWith("/deeposint")){
+    const arg=raw.split(/\s+/).slice(1).join(" ").trim();
+    await tg(token,"sendMessage",{chat_id:adminId,text:await deepOsintText(sb,arg),reply_markup:panelKeyboard});
+    return true;
+  }
   if(low.startsWith("/priority")){
     const parts=raw.split(/\s+/);
     const hours=Number(parts[1]??24);
@@ -813,7 +847,7 @@ Deno.serve(async(req:Request)=>{
 
     let state=stateRow?.value??{};
 
-    if(!state.commands_v16){
+    if(!state.commands_v17){
       await tg(token,"setMyCommands",{commands:[
         {command:"start",description:"Открыть админ-панель"},
         {command:"status",description:"Статус мониторинга"},
@@ -826,6 +860,7 @@ Deno.serve(async(req:Request)=>{
         {command:"search",description:"Поиск событий по фильтрам"},
         {command:"analytics",description:"Сводная аналитика 24/168/720 ч"},
         {command:"priority",description:"События по приоритету"},
+        {command:"deeposint",description:"Глубокая OSINT-корреляция"},
         {command:"satellite",description:"Sentinel-2 до/после и NBR/NDVI"},
         {command:"osint",description:"Внешний OSINT по событию"},
         {command:"geo",description:"Гео- и инфраструктурный OSINT"},
@@ -844,6 +879,7 @@ Deno.serve(async(req:Request)=>{
       state.commands_v14=true;
       state.commands_v15=true;
       state.commands_v16=true;
+      state.commands_v17=true;
     }
 
     if(mode==="cron"){

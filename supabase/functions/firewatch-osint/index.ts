@@ -50,7 +50,30 @@ async function upsert(sb:any,e:any){
     p_source_url:e.source_url??null,p_country_hint:e.country_hint??null,p_payload:e.payload??{}
   });
   if(error)throw error;
-  return data;
+
+  let fusionLinks=0;
+  try{
+    const {data:docId,error:de}=await sb.rpc("upsert_osint_document",{
+      p_source_key:e.source,
+      p_external_id:e.source_event_id,
+      p_published_at:e.observed_at,
+      p_source_updated_at:null,
+      p_title:e.title,
+      p_summary:e.payload?.description??e.category??null,
+      p_url:e.source_url??null,
+      p_language:null,
+      p_country_codes:e.country_hint&&/ukraine|ukr|україн/i.test(String(e.country_hint))?["UKR"]:[],
+      p_lat:e.lat,p_lon:e.lon,p_payload:e.payload??{}
+    });
+    if(de)throw de;
+    const {data:lr,error:le}=await sb.rpc("firewatch_link_osint_document",{p_document:docId});
+    if(le)throw le;
+    fusionLinks=Number(lr?.links??0);
+  }catch(err){
+    console.error("fusion mirror failed:",err instanceof Error?err.message:String(err));
+  }
+
+  return {...(data??{}),fusion_links:fusionLinks};
 }
 
 async function ingestGdacs(sb:any){
