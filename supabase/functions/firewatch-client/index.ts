@@ -100,18 +100,26 @@ async function deepOsint(sb:any,q:string){
 function deepOsintText(d:any){
   if(!d)return "🧠 Deep OSINT\n\nСобытие не найдено.";
   const e=d.event??{},s=d.summary??{},eff=d.effis??{},sem=d.semantic??{},ss=sem.summary??{},src:any[]=Array.isArray(d.sources)?d.sources:[],tl:any[]=Array.isArray(d.timeline)?d.timeline:[];
+  const items=Number(ss.items??0),providers=Number(ss.providers??0),classes=Number(ss.source_classes??0);
+  const geoSupported=Number(ss.geo_supported??0),duplicates=Number(ss.duplicate_items??0),divergences=Number(ss.divergences??0);
+  const corr=String(s.corroboration_level??"none");
   const lines=[
     "🧠 DEEP OSINT #"+String(e.id??"").slice(0,8),
-    "Приоритет: "+Number(e.priority_score??0)+"/100 • "+String(e.priority_level??"—"),
-    "Уверенность детекции: "+String(e.confidence_level??"—"),
-    "Независимые strong providers: "+Number(s.strong_independent_providers??0),
-    "Классы источников: "+Number(s.strong_source_classes??0),
-    "Corroboration: "+String(s.corroboration_level??"none"),
-    "Fusion docs: "+Number(s.fusion_documents??0)+" • public OSINT: "+Number(s.public_osint??0)+" • legacy: "+Number(s.legacy_external??0),
-    "🌲 EFFIS: "+String(eff.status??"not_cached")+" • FWI "+(eff.fwi_value==null?"—":Number(eff.fwi_value).toFixed(1))+" • active "+Number(eff.active_fire_count??0)+" • burnt-area "+Number(eff.burnt_area_count??0),
-    "🧩 Semantic: items "+Number(ss.items??0)+" • clusters "+Number(ss.clusters??0)+" • duplicates "+Number(ss.duplicate_items??0)+" • geo unsupported "+Number(ss.geo_unsupported??0)+" • divergences "+Number(ss.divergences??0),
+    "Priority: "+Number(e.priority_score??0)+"/100 • confidence: "+String(e.confidence_level??"—"),
+    "",
+    "📚 OSINT evidence",
+    "Публикаций: "+items,
+    "Провайдеров: "+providers+" • классов источников: "+classes,
+    "Независимое corroboration: "+corr,
+    "Географическое подтверждение: "+geoSupported+"/"+items,
+    "Дубликаты/пересказы: "+duplicates+" • расхождения: "+divergences,
     ""
   ];
+  if(String(eff.status??"not_cached")==="not_cached"){
+    lines.push("🌲 EFFIS: not cached • ещё не обработано текущим priority batch","");
+  }else{
+    lines.push("🌲 EFFIS: "+String(eff.status??"—")+" • FWI "+(eff.fwi_value==null?"—":Number(eff.fwi_value).toFixed(1))+" • active "+Number(eff.active_fire_count??0)+" • burnt-area "+Number(eff.burnt_area_count??0),"");
+  }
   if(src.length){
     lines.push("Источники Fusion:");
     for(const x of src.slice(0,8))lines.push("• "+String(x.label??x.source)+" • "+String(x.source_class??"—")+" • max "+Number(x.max_relevance??0)+"/100 • "+Number(x.evidence_count??0)+" evidence");
