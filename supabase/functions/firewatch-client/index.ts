@@ -560,30 +560,7 @@ async function regionalSearchRequest(payload:any){
   const t=await r.text();let d:any;try{d=JSON.parse(t)}catch{throw new Error("Regional Search invalid response")}
   if(!r.ok||!d?.ok)throw new Error(String(d?.error??("HTTP "+r.status)));return d;
 }
-const REGIONAL_ALIASES:[string,string][]=[
- ["пожарные части","fire_station"],["пожежні частини","fire_station"],["fire stations","fire_station"],
- ["энергообъекты","energy"],["вышки связи","telecom"],["транспортные узлы","transport"],
- ["промышленные объекты","industrial"],["учебные заведения","school"],
- ["автозаправки","fuel"],["заправки","fuel"],["gas stations","fuel"],["petrol stations","fuel"],
- ["супермаркеты","supermarket"],["супермаркети","supermarket"],["supermarkets","supermarket"],
- ["больницы","hospital"],["лікарні","hospital"],["hospitals","hospital"],["clinics","hospital"],
- ["аптеки","pharmacy"],["pharmacies","pharmacy"],["склады","warehouse"],["склади","warehouse"],["warehouses","warehouse"],
- ["полиция","police"],["поліція","police"],["police","police"],["телеком","telecom"],["telecom","telecom"],
- ["промышленность","industrial"],["промисловість","industrial"],["industrial","industrial"],
- ["транспорт","transport"],["transport","transport"],["энергетика","energy"],["енергетика","energy"],["energy","energy"],
- ["школы","school"],["школи","school"],["schools","school"],["hospital","hospital"],["clinic","hospital"],
- ["pharmacy","pharmacy"],["warehouse","warehouse"],["supermarket","supermarket"],["fire_station","fire_station"],
- ["fuel","fuel"],["азс","fuel"]
-];
-function parseRegionalArgs(v:string){
-  const raw=String(v??"").trim(),low=raw.toLowerCase();
-  for(const [alias,key] of [...REGIONAL_ALIASES].sort((a,b)=>b[0].length-a[0].length)){
-    const i=low.indexOf(alias.toLowerCase());if(i<0)continue;
-    const oblast=(raw.slice(0,i)+" "+raw.slice(i+alias.length)).replace(/\s+/g," ").trim();
-    if(oblast)return{oblast,category:key};
-  }
-  return null;
-}
+function parseRegionalArgs(v:string){const query=String(v??"").trim();return query?{query}:null}
 function regionalCsv(d:any){
   const cols=["No","Name","Brand","Operator","Settlement","Address","Latitude","Longitude","Sources","Source count","Resolution status","Confidence","Wikidata QID"];
   const cell=(v:any)=>{const s=String(v??"");return /[",\n\r;]/.test(s)?'"'+s.replace(/"/g,'""')+'"':s};
@@ -606,7 +583,7 @@ function regionalSearchText(d:any){
   lines.push("","Данные — инвентаризация публичных источников; полнота зависит от картографирования и актуальности источников.");
   return lines.join("\n").slice(0,3900);
 }
-function regionalErrorText(e:any){const m=e instanceof Error?e.message:String(e);if(/oblast not found/i.test(m))return "⚠️ Область не распознана.\n\nПример: /objects Киевская область АЗС\nТакже поддерживаются украинские и английские названия.";if(/unsupported category/i.test(m))return "⚠️ Категория не поддерживается.\n\nДоступно: АЗС, больницы, аптеки, школы, пожарные части, полиция, энергетика, промышленность, склады, супермаркеты, телеком, транспорт.";return "⚠️ Региональный поиск временно не выполнен.\n"+m.slice(0,240)}
+function regionalErrorText(e:any){const m=e instanceof Error?e.message:String(e);if(/oblast not found/i.test(m))return "⚠️ Область не распознана.\n\nПример: /objects Киевская область АЗС\nТакже поддерживаются украинские и английские названия.";if(/unsupported category/i.test(m))return "⚠️ Категория не поддерживается.\n\nДоступно: АЗС, подстанции/ПС, электростанции/ТЭЦ/АЭС, резервуары/ёмкости, больницы, аптеки, школы, пожарные части, полиция, энергетика, промышленность, склады, супермаркеты, телеком, транспорт.";return "⚠️ Региональный поиск временно не выполнен.\n"+m.slice(0,240)}
 
 function areaReportText(d:any){
   const r=d?.report??{},inf=r.infrastructure??{},sum=inf.summary??{},counts=sum.by_category??{},gh=r.ghsl??{},ent=r.entities??{},es=ent.summary??{},reg=r.official_registry??{},os=r.osint??{},cov=r.coverage??{};
@@ -1163,7 +1140,7 @@ Deno.serve(async(req:Request)=>{
       return json({ok:true,processed:1});
     }
     if(low==="🏭 объекты области"){
-      await tg(token,"sendMessage",{chat_id:chatId,text:"🏭 Объекты области\n\nПоиск по полигону области и категории:\n/objects Полтавская область АЗС\n/objects Київська аптеки\n/objects Львівська школы\n\nПолный CSV:\n/objects_csv Полтавская область АЗС\n\nКатегории: АЗС, больницы, аптеки, школы, пожарные части, полиция, энергетика, промышленность, склады, супермаркеты, телеком, транспорт.",reply_markup:activeKeyboard});
+      await tg(token,"sendMessage",{chat_id:chatId,text:"🏭 Объекты области\n\nПоиск по полигону области и категории:\n/objects Полтавская область АЗС\n/objects Київська аптеки\n/objects Львівська школы\n\nПолный CSV:\n/objects_csv Полтавская область АЗС\n\nКатегории: АЗС, подстанции/ПС, электростанции/ТЭЦ/АЭС, резервуары/ёмкости, больницы, аптеки, школы, пожарные части, полиция, энергетика, промышленность, склады, супермаркеты, телеком, транспорт.",reply_markup:activeKeyboard});
       return json({ok:true,processed:1});
     }
     if(low==="🛰 satellite"){
@@ -1175,8 +1152,8 @@ Deno.serve(async(req:Request)=>{
       if(!p){await tg(token,"sendMessage",{chat_id:chatId,text:"Использование: /objects_csv <область> <категория>\nПример: /objects_csv Полтавская область АЗС",reply_markup:activeKeyboard});return json({ok:true,processed:1})}
       try{
         const d=await regionalSearchRequest(p);await countRequest(sb,userId);
-        const csv=regionalCsv(d),name=String(d?.oblast?.code??d?.oblast_code??"region")+"-"+String(d?.category_key??p.category)+".csv";
-        await tgTextDocument(token,chatId,csv,name,"GeoWatch • "+String(d?.oblast?.name_uk??d?.oblast_name??p.oblast)+" • "+String(d?.category_label??p.category)+" • "+Number(d?.summary?.resolved_objects??0)+" объектов");
+        const csv=regionalCsv(d),name=String(d?.oblast?.code??d?.oblast_code??"region")+"-"+String(d?.category_key??"objects")+".csv";
+        await tgTextDocument(token,chatId,csv,name,"GeoWatch • "+String(d?.oblast?.name_uk??d?.oblast_name??q)+" • "+String(d?.category_label??d?.category_key??"objects")+" • "+Number(d?.summary?.resolved_objects??0)+" объектов");
       }catch(e){console.error("client regional csv failed:",e instanceof Error?e.message:String(e));await tg(token,"sendMessage",{chat_id:chatId,text:regionalErrorText(e),reply_markup:activeKeyboard})}
       return json({ok:true,processed:1});
     }

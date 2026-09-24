@@ -1,6 +1,7 @@
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "@supabase/supabase-js";
 import { diceSimilarity as dice, normalizeRegionQuery as norm, resolveOblastRow, validateOblastAliases } from "./region_aliases.ts";
+import { REGIONAL_SPECS as SPECS, type RegionalSpec as Spec, parseRegionalQuery, specFor, validateRegionalCategories } from "./regional_categories.ts";
 
 const POSTPASS="https://postpass.geofabrik.de/api/interpreter";
 const FUSED="https://www.fused.io/server/v1/realtime-shared/UDF_Overture_Maps_Example/run/tiles";
@@ -9,25 +10,8 @@ const CACHE_MS=12*3600_000;
 const RAW_LIMIT=7000;
 const OUTPUT_LIMIT=5000;
 
-type Spec={key:string,label:string,aliases:string[],osm:string,overture:string[],overtureTypes:string[]};
-const SPECS:Spec[]=[
- {key:"fuel",label:"АЗС",aliases:["азс","заправка","заправки","автозаправка","автозаправки","fuel","gas station","gas stations","petrol station","petrol stations"],osm:"(tags->>'amenity'='fuel' OR tags->>'shop'='fuel')",overture:["gas station","gas_station","fuel","petrol station","petrol_station","service station","service_station"],overtureTypes:["place"]},
- {key:"hospital",label:"Больницы и клиники",aliases:["больница","больницы","лікарня","лікарні","hospital","hospitals","clinic","clinics"],osm:"(tags->>'amenity' IN ('hospital','clinic') OR tags->>'healthcare' IN ('hospital','clinic'))",overture:["hospital","clinic","medical center","medical_center"],overtureTypes:["place"]},
- {key:"pharmacy",label:"Аптеки",aliases:["аптека","аптеки","pharmacy","pharmacies"],osm:"(tags->>'amenity'='pharmacy' OR tags->>'healthcare'='pharmacy')",overture:["pharmacy","drugstore"],overtureTypes:["place"]},
- {key:"school",label:"Учебные заведения",aliases:["школа","школы","школи","school","schools","education"],osm:"(tags->>'amenity' IN ('school','university','college','kindergarten') OR tags->>'building' IN ('school','university','college','kindergarten'))",overture:["school","university","college","kindergarten"],overtureTypes:["place"]},
- {key:"fire_station",label:"Пожарные части",aliases:["пожарная часть","пожарные части","пожежна частина","пожежні частини","fire station","fire stations"],osm:"(tags->>'amenity'='fire_station' OR tags->>'emergency'='fire_station')",overture:["fire station","fire_station"],overtureTypes:["place"]},
- {key:"police",label:"Полиция",aliases:["полиция","поліція","police"],osm:"(tags->>'amenity'='police' OR tags->>'office'='police')",overture:["police","police station","police_station"],overtureTypes:["place"]},
- {key:"energy",label:"Энергообъекты",aliases:["энергетика","энергообъекты","енергетика","energy","power"],osm:"(tags ? 'power')",overture:["power","substation","power plant","power_plant","electric"],overtureTypes:["infrastructure","place"]},
- {key:"industrial",label:"Промышленные объекты",aliases:["промышленность","промышленные","промисловість","industrial","factory","factories"],osm:"(tags->>'landuse'='industrial' OR tags->>'man_made'='works' OR tags ? 'industrial' OR tags->>'building' IN ('industrial','factory'))",overture:["industrial","factory","manufacturing","plant"],overtureTypes:["place","infrastructure"]},
- {key:"warehouse",label:"Склады",aliases:["склад","склады","склади","warehouse","warehouses"],osm:"(tags->>'building'='warehouse' OR tags->>'industrial'='warehouse')",overture:["warehouse","distribution center","distribution_center"],overtureTypes:["place"]},
- {key:"supermarket",label:"Супермаркеты",aliases:["супермаркет","супермаркеты","супермаркети","supermarket","supermarkets"],osm:"(tags->>'shop'='supermarket' OR tags->>'building'='supermarket')",overture:["supermarket","grocery"],overtureTypes:["place"]},
- {key:"telecom",label:"Телеком-инфраструктура",aliases:["телеком","вышки связи","вежі зв'язку","telecom","communications tower"],osm:"(tags ? 'telecom' OR tags->>'office'='telecommunication' OR tags->>'tower:type'='communication' OR tags->>'man_made' IN ('mast','communications_tower','antenna'))",overture:["telecom","communication","communications tower","communications_tower"],overtureTypes:["infrastructure","place"]},
- {key:"transport",label:"Транспортные узлы",aliases:["транспорт","transport","станции","станції"],osm:"(tags->>'railway' IN ('station','halt','yard','terminal') OR tags->>'amenity'='bus_station' OR tags->>'aeroway' IN ('aerodrome','terminal') OR tags->>'harbour'='yes' OR tags->>'seamark:type'='harbour')",overture:["station","terminal","airport","harbour","harbor","transport"],overtureTypes:["place","infrastructure"]}
-];
-
 function json(x:unknown,s=200){return new Response(JSON.stringify(x,null,2),{status:s,headers:{"content-type":"application/json; charset=utf-8","cache-control":"no-store"}})}
 function errText(e:any){return e instanceof Error?e.message:(e&&typeof e==="object"?JSON.stringify({code:e.code,message:e.message,details:e.details,hint:e.hint}):String(e))}
-function specFor(v:any){const q=norm(v);return SPECS.find(s=>s.key===q||s.aliases.some(a=>norm(a)===q))??null}
 function hav(a:number,b:number,c:number,d:number){const p=Math.PI/180,R=6371000,da=(c-a)*p,db=(d-b)*p,x=Math.sin(da/2)**2+Math.cos(a*p)*Math.cos(c*p)*Math.sin(db/2)**2;return 2*R*Math.asin(Math.min(1,Math.sqrt(x)))}
 function tileXY(lat:number,lon:number,z:number){const n=2**z,x=Math.floor((lon+180)/360*n),lr=lat*Math.PI/180,y=Math.floor((1-Math.asinh(Math.tan(lr))/Math.PI)/2*n);return{x,y}}
 function pointInRing(lon:number,lat:number,ring:any[]){let inside=false;for(let i=0,j=ring.length-1;i<ring.length;j=i++){const xi=Number(ring[i]?.[0]),yi=Number(ring[i]?.[1]),xj=Number(ring[j]?.[0]),yj=Number(ring[j]?.[1]);if(![xi,yi,xj,yj].every(Number.isFinite))continue;const hit=((yi>lat)!==(yj>lat))&&(lon<(xj-xi)*(lat-yi)/((yj-yi)||1e-15)+xi);if(hit)inside=!inside}return inside}
@@ -80,9 +64,12 @@ Deno.serve(async(req:Request)=>{
   let authorized=bearer==="Bearer "+key;if(!authorized&&cron){const {data}=await sb.rpc("verify_firewatch_cron_secret",{p_secret:cron});authorized=data===true}if(!authorized)return json({ok:false,error:"unauthorized"},401);
   const body:any=await req.json().catch(()=>({}));
   if(body.self_test==="oblast_aliases"){const report=validateOblastAliases(await oblastRows(sb)),now=new Date().toISOString(),monitor={status:report.ok?"active":"error",last_check:now,...report};const {error:me}=await sb.from("system_state").upsert({key:"monitor_regional_aliases",value:monitor,updated_at:now});if(me)throw me;return json({self_test:"oblast_aliases",...report},report.ok?200:500)}
-  const spec=specFor(body.category);
-  if(!spec)return json({ok:false,error:"unsupported category",supported:SPECS.map(x=>({key:x.key,label:x.label}))},400);
-  const oblast=await resolveOblast(sb,body.oblast);if(!oblast)return json({ok:false,error:"oblast not found"},404);
+  if(body.self_test==="regional_categories"){const report=validateRegionalCategories();return json({self_test:"regional_categories",...report},report.ok?200:500)}
+  const parsed=body.query?parseRegionalQuery(body.query):null;
+  const categoryInput=parsed?.category??body.category,oblastInput=parsed?.oblast??body.oblast;
+  const spec=specFor(categoryInput);
+  if(!spec)return json({ok:false,error:"unsupported category",supported:SPECS.map(x=>({key:x.key,label:x.label,aliases:x.aliases.slice(0,8)}))},400);
+  const oblast=await resolveOblast(sb,oblastInput);if(!oblast)return json({ok:false,error:"oblast not found"},404);
   const queryKey=String(oblast.code)+":"+spec.key;
   const {data:cached,error:ce}=await sb.from("regional_object_search_cache").select("*").eq("query_key",queryKey).maybeSingle();if(ce)throw ce;
   const age=Date.now()-Date.parse(String(cached?.queried_at??""));
