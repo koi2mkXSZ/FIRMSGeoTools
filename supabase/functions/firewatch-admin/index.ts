@@ -413,12 +413,13 @@ async function deepOsintText(sb:any,q?:string){
     .abortSignal(AbortSignal.timeout(7000));
   if(error)throw error;
   if(!data)return "🧠 Deep OSINT: событие не найдено.";
-  const e:any=data.event??{},s:any=data.summary??{},src:any[]=Array.isArray(data.sources)?data.sources:[],tl:any[]=Array.isArray(data.timeline)?data.timeline:[];
+  const e:any=data.event??{},s:any=data.summary??{},eff:any=data.effis??{},src:any[]=Array.isArray(data.sources)?data.sources:[],tl:any[]=Array.isArray(data.timeline)?data.timeline:[];
   const lines=[
     `🧠 Deep OSINT / Stage 40 #${String(e.id??"").slice(0,8)}`,
     `Priority ${Number(e.priority_score??0)}/100 • confidence ${e.confidence_level??"—"}`,
     `Strong providers: ${Number(s.strong_independent_providers??0)} • source classes: ${Number(s.strong_source_classes??0)} • corroboration: ${s.corroboration_level??"none"}`,
     `Fusion ${Number(s.fusion_documents??0)} • public ${Number(s.public_osint??0)} • legacy ${Number(s.legacy_external??0)}`,
+    `EFFIS ${eff.status??"not_cached"} • FWI ${eff.fwi_value==null?"—":Number(eff.fwi_value).toFixed(1)} • active ${Number(eff.active_fire_count??0)} • burnt-area ${Number(eff.burnt_area_count??0)}`,
     ""
   ];
   if(src.length){

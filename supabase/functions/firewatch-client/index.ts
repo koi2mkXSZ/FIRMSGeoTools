@@ -99,7 +99,7 @@ async function deepOsint(sb:any,q:string){
 }
 function deepOsintText(d:any){
   if(!d)return "🧠 Deep OSINT\n\nСобытие не найдено.";
-  const e=d.event??{},s=d.summary??{},src:any[]=Array.isArray(d.sources)?d.sources:[],tl:any[]=Array.isArray(d.timeline)?d.timeline:[];
+  const e=d.event??{},s=d.summary??{},eff=d.effis??{},src:any[]=Array.isArray(d.sources)?d.sources:[],tl:any[]=Array.isArray(d.timeline)?d.timeline:[];
   const lines=[
     "🧠 DEEP OSINT #"+String(e.id??"").slice(0,8),
     "Приоритет: "+Number(e.priority_score??0)+"/100 • "+String(e.priority_level??"—"),
@@ -108,6 +108,7 @@ function deepOsintText(d:any){
     "Классы источников: "+Number(s.strong_source_classes??0),
     "Corroboration: "+String(s.corroboration_level??"none"),
     "Fusion docs: "+Number(s.fusion_documents??0)+" • public OSINT: "+Number(s.public_osint??0)+" • legacy: "+Number(s.legacy_external??0),
+    "🌲 EFFIS: "+String(eff.status??"not_cached")+" • FWI "+(eff.fwi_value==null?"—":Number(eff.fwi_value).toFixed(1))+" • active "+Number(eff.active_fire_count??0)+" • burnt-area "+Number(eff.burnt_area_count??0),
     ""
   ];
   if(src.length){
