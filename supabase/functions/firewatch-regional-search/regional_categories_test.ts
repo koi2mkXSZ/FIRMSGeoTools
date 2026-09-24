@@ -70,7 +70,7 @@ Deno.test("Stage 43.1 filters parse safely",()=>{
  assert(x.filters.settlement==="Кременчуг","settlement missing");
  assert(x.filters.address==="ул. Киевская","address missing");
  const p=buildFilterPredicate(x.filters);
- assert(p.includes("addr:city")&&p.includes("brand")&&p.includes("operator"),"filter SQL missing predicates");
+ assert(!p.includes("addr:city")&&p.includes("brand")&&p.includes("operator")&&p.includes("addr:street"),"filter SQL pushdown mismatch");
  assert(!p.includes("DROP TABLE"),"unsafe SQL leaked");
 });
 
