@@ -51,3 +51,4 @@ jobs:
           deno check --config supabase/functions/firewatch-registry-fusion/deno.json supabase/functions/firewatch-registry-fusion/index.ts
           deno check --config supabase/functions/firewatch-ghsl/deno.json supabase/functions/firewatch-ghsl/index.ts
           deno check --config supabase/functions/firewatch-area-report/deno.json supabase/functions/firewatch-area-report/index.ts
+          deno check --config supabase/functions/firewatch-regional-search/deno.json supabase/functions/firewatch-regional-search/index.ts

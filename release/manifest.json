@@ -1,7 +1,7 @@
 {
   "name": "FIRMSGeoTools",
   "version": "1.0.0",
-  "schema_version": 37,
+  "schema_version": 38,
   "channel": "stable",
   "profile": "core",
   "migrations": [
@@ -45,7 +45,8 @@
     "0034_stage42_2_entity_profiles.sql",
     "0035_stage42_3_registry_fusion.sql",
     "0036_stage42_4_area_osint_report.sql",
-    "0037_stage42_4_production_hardening.sql"
+    "0037_stage42_4_production_hardening.sql",
+    "0038_stage43_0_regional_object_search.sql"
   ],
   "edge_functions": [
     "eumetsat-frp-inspect",
@@ -79,6 +80,7 @@
     "firewatch-osint",
     "firewatch-osint-fusion",
     "firewatch-osint-semantic",
+    "firewatch-regional-search",
     "firewatch-registry-fusion",
     "firewatch-satellite-evidence",
     "firewatch-satellite-visual",
