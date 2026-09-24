@@ -291,3 +291,99 @@ Supabase Security Advisor returned no finding related to the regional-alias heal
 - `firewatch-watchdog`: ACTIVE v38;
 - schema version: 39;
 - Clean Install CI for runtime-health commit `de49ae4838c21843b0a7fe8f26e11db6e31ec802`: SUCCESS (#36016268263).
+
+
+## Stage 43.0.2 — Centralized category resolver
+
+Regional category parsing was moved out of the Telegram bots into the shared backend catalog.
+
+### Why
+
+Previously the client/admin bots each maintained their own hard-coded category alias list. A category unknown to the bot was rejected before `firewatch-regional-search` was called, which made commands such as:
+
+- `/objects Полтавская область Подстанция`;
+- `/objects Полтавская область ПС`;
+- `/objects Полтавская область Резервуар`;
+- `/objects Полтавская область электростанция`;
+
+fall back to usage help despite the regional backend itself being healthy.
+
+### Architecture
+
+Both Telegram bots now forward the raw command tail as a single `query` value.
+
+`firewatch-regional-search` performs the split:
+
+`<region text> + <category alias>`
+
+using one shared catalog in:
+
+`supabase/functions/firewatch-regional-search/regional_categories.ts`
+
+This removes category-list duplication between:
+
+- client bot;
+- admin bot;
+- regional backend.
+
+Dashboard continues to send canonical category keys.
+
+### Added precise infrastructure categories
+
+- `power_substation` — Электроподстанции
+  - aliases include `Подстанция`, `Подстанции`, `ПС`, Ukrainian and English equivalents.
+  - OSM predicate: `power=substation`.
+
+- `power_plant` — Электростанции
+  - aliases include `электростанция`, `ТЭС`, `ТЭЦ`, `ГЭС`, `АЭС`, Ukrainian and English equivalents.
+  - OSM predicate: `power=plant`, `power=generator`, or `plant:source`.
+
+- `reservoir` — Резервуары и ёмкости
+  - aliases include `резервуар`, `ёмкость`, `storage tank`, `reservoir`.
+  - OSM predicate includes storage tanks and reservoir polygons.
+
+The existing broad `energy` category remains available for all OSM objects carrying a `power` tag.
+
+### Category integrity tests
+
+CI now runs `regional_categories_test.ts` and verifies:
+
+- no alias collision between categories;
+- new infrastructure aliases resolve to the expected canonical key;
+- full Telegram-style queries are parsed centrally;
+- prefix and suffix command forms remain supported.
+
+Current production catalog:
+
+- categories: 15;
+- normalized category aliases: 123;
+- duplicate category aliases: 0.
+
+The 6-hour regional runtime self-test now validates both the region alias registry and the category catalog. Watchdog raises `REGIONAL_CATEGORY_ERROR` if category integrity fails.
+
+### Production acceptance — 2026-09-24
+
+Poltava fresh/cached smoke:
+
+- `Полтавская область Подстанция` -> `UA53:power_substation`, HTTP 200, active, 512 objects, truncated=false;
+- `Полтавская область ПС` -> the same `UA53:power_substation` category, HTTP 200;
+- `Полтавская область Резервуар` -> `UA53:reservoir`, HTTP 200, active, 917 objects, truncated=false;
+- `Полтавская область электростанция` -> `UA53:power_plant`, HTTP 200, active, 113 objects, 2 Wikidata enrichments, truncated=false.
+
+Combined production self-test:
+
+- regions: 27/27;
+- region aliases: 1631;
+- regional resolution failures: 0;
+- categories: 15;
+- category aliases: 123;
+- category alias collisions: 0.
+
+Production versions:
+
+- `firewatch-regional-search`: ACTIVE v10;
+- `firewatch-client`: ACTIVE v44;
+- `firewatch-admin`: ACTIVE v89;
+- `firewatch-watchdog`: ACTIVE v39.
+
+Web Dashboard production selector includes the three new precise infrastructure categories.
