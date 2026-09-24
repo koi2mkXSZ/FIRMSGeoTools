@@ -8,6 +8,12 @@ function safeEq(a:string,b:string){if(a.length!==b.length)return false;let x=0;f
 const cors={"access-control-allow-origin":"https://koi2mkxsz.github.io","access-control-allow-methods":"GET,POST,OPTIONS","access-control-allow-headers":"content-type","vary":"Origin"};
 function json(data:unknown,status=200){return new Response(JSON.stringify(data),{status,headers:{...cors,"content-type":"application/json; charset=utf-8","cache-control":"no-store","referrer-policy":"no-referrer","x-content-type-options":"nosniff"}})}
 function html(body:string,status=200){return new Response(body,{status,headers:{"content-type":"text/html; charset=utf-8","cache-control":"no-store","referrer-policy":"no-referrer","x-content-type-options":"nosniff","x-frame-options":"DENY","content-security-policy":"default-src 'self'; script-src 'self' 'unsafe-inline' https://unpkg.com; style-src 'self' 'unsafe-inline' https://unpkg.com; img-src 'self' data: https://*.tile.openstreetmap.org; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'"}})}
+async function callInternal(base:string,key:string,slug:string,body:any,timeout=65000){
+ const r=await fetch(base+"/functions/v1/"+slug,{method:"POST",headers:{"content-type":"application/json","authorization":"Bearer "+key},body:JSON.stringify(body),signal:AbortSignal.timeout(timeout)});
+ const t=await r.text();let d:any;try{d=JSON.parse(t)}catch{throw new Error(slug+" invalid JSON")}
+ if(!r.ok||d?.ok===false)throw new Error(slug+": "+String(d?.error??("HTTP "+r.status)));
+ return d;
+}
 Deno.serve(async(req:Request)=>{
  if(req.method==="OPTIONS")return new Response(null,{status:204,headers:cors});
  const u=new URL(req.url),base=Deno.env.get("SUPABASE_URL"),key=Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");if(!base||!key)return json({ok:false,error:"missing env"},500);
@@ -15,7 +21,7 @@ Deno.serve(async(req:Request)=>{
  if(!Number.isFinite(exp)||exp<now||exp>now+12*3600||!sig)return html("<h1>GeoWatch</h1><p>Ссылка недействительна или истекла.</p>",401);
  const {data:secret,error:se}=await sb.rpc("firewatch_optional_vault_secret",{p_name:"firewatch_cron_secret"});if(se||!secret)return json({ok:false,error:"auth secret unavailable"},503);
  if(!safeEq(sig,await hmac(String(secret),"dashboard:"+String(exp))))return html("<h1>GeoWatch</h1><p>Ссылка недействительна.</p>",401);
- const action=u.searchParams.get("action");if(!action)return json({ok:true,service:"GeoWatch Dashboard API",version:"stage40.7-dashboard-v3"});
+ const action=u.searchParams.get("action");if(!action)return json({ok:true,service:"GeoWatch Dashboard API",version:"stage42.5-dashboard-v1"});
  try{
   const body:any=req.method==="POST"?await req.json().catch(()=>({})):{};
   if(action==="bootstrap"){
@@ -27,6 +33,18 @@ Deno.serve(async(req:Request)=>{
   if(action==="detail"){const id=String(body.id||"").trim();const {data:e,error}=await sb.rpc("firewatch_event_detail",{p_query:id||null});if(error)throw error;if(!e)return json({ok:false,error:"not found"},404);const {data:s}=await sb.rpc("firewatch_satellite_evidence",{p_query:id||null});return json({ok:true,event:{...e,surface_status:s?.status??"pending",dnbr:s?.dnbr??null,dndvi:s?.dndvi??null}})}
   if(action==="timeline"){const id=String(body.id||"").trim();const {data,error}=await sb.rpc("firewatch_event_timeline",{p_query:id||null});if(error)throw error;if(!data)return json({ok:false,error:"not found"},404);return json({ok:true,timeline:data})}
   if(action==="intel"){const id=String(body.id||"").trim();if(!id)return json({ok:false,error:"missing id"},400);const {data,error}=await sb.rpc("firewatch_dashboard_event_intel",{p_query:id});if(error)throw error;if(!data)return json({ok:false,error:"not found"},404);return json({ok:true,...data})}
+  if(action==="area"){
+   const id=String(body.id||"").trim();if(!id)return json({ok:false,error:"missing id"},400);
+   const rn=Math.round(Number(body.radius_m??2000)),radius=Math.max(250,Math.min(10000,Number.isFinite(rn)?rn:2000));
+   const d=await callInternal(base,key,"firewatch-area-report",{event_id:id,radius_m:radius},70000);
+   const r=d?.report??{};
+   return json({
+    ok:true,cached:Boolean(d?.cached),query_key:d?.query_key??null,generated_at:d?.generated_at??null,status:d?.status??"unknown",
+    center:r?.center??null,coverage:r?.coverage??{},entities:r?.entities??{summary:{},top:[],profiles:[]},
+    official_registry:r?.official_registry??{hit_count:0,hits:[]},source_status:d?.source_status??{},errors:Array.isArray(d?.errors)?d.errors:[],
+    runtime:r?.runtime??{},policy:r?.policy??null
+   });
+  }
   return json({ok:false,error:"unknown action"},404)
  }catch(e){return json({ok:false,error:e instanceof Error?e.message:String(e)},500)}
 })
