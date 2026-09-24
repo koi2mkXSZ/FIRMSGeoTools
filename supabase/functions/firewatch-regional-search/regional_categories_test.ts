@@ -1,4 +1,4 @@
-import {buildSafeGenericPredicate,parseRegionalQuery,resolveCategoryIntent,specFor,validateRegionalCategories} from "./regional_categories.ts";
+import {buildFilterPredicate,buildSafeGenericPredicate,extractRegionalFilters,mergeFilters,multiKey,parseRegionalQuery,resolveCategoryIntent,resolveCategoryList,splitObjectExpression,specFor,validateRegionalCategories} from "./regional_categories.ts";
 import {normalizeRegionQuery} from "./region_aliases.ts";
 
 function assert(x:unknown,msg:string){if(!x)throw new Error(msg)}
@@ -59,4 +59,43 @@ Deno.test("generic SQL predicate is injection-safe",()=>{
  assert(!p!.includes("DROP TABLE"),"raw SQL leaked");
  assert(!p!.includes(";"),"semicolon leaked");
  assert(!p!.includes("--"),"comment marker leaked");
+});
+
+
+Deno.test("Stage 43.1 filters parse safely",()=>{
+ const x=extractRegionalFilters('АЗС + нефтебазы brand:WOG operator:"ООО Надежда" city:Кременчуг address:"ул. Киевская"');
+ assert(x.text==="АЗС + нефтебазы","filter tokens must be removed from expression");
+ assert(x.filters.brand==="WOG","brand missing");
+ assert(x.filters.operator==="ООО Надежда","operator missing");
+ assert(x.filters.settlement==="Кременчуг","settlement missing");
+ assert(x.filters.address==="ул. Киевская","address missing");
+ const p=buildFilterPredicate(x.filters);
+ assert(p.includes("addr:city")&&p.includes("brand")&&p.includes("operator"),"filter SQL missing predicates");
+ assert(!p.includes("DROP TABLE"),"unsafe SQL leaked");
+});
+
+Deno.test("Stage 43.1 multi-category plan resolves independently",()=>{
+ const parts=splitObjectExpression("АЗС + нефтебазы + резервуары");
+ assert(parts.length===3,"expected 3 categories");
+ const plan=resolveCategoryList(parts);
+ assert(!plan.ambiguous,"multi-category should not be ambiguous");
+ assert(plan.resolutions.length===3,"expected 3 unique resolutions");
+ const modes=plan.resolutions.map(x=>x.mode);
+ assert(modes.includes("canonical")&&modes.includes("semantic_hint"),"expected mixed resolution modes");
+});
+
+Deno.test("Stage 43.1 cache key changes with filters",()=>{
+ const p=resolveCategoryList(splitObjectExpression("АЗС + резервуары")).resolutions;
+ const a=multiKey(p,{brand:"WOG"});
+ const b=multiKey(p,{brand:"OKKO"});
+ const c=multiKey(p,{brand:"WOG"});
+ assert(a!==b,"different filters must have different keys");
+ assert(a===c,"same plan must have deterministic key");
+});
+
+Deno.test("Stage 43.1 explicit filters override parsed filters",()=>{
+ const parsed=extractRegionalFilters("АЗС city:Полтава brand:WOG");
+ const merged=mergeFilters(parsed.filters,{settlement:"Кременчуг"});
+ assert(merged.settlement==="Кременчуг","explicit settlement override failed");
+ assert(merged.brand==="WOG","unrelated parsed filter lost");
 });
