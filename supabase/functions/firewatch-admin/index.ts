@@ -19,7 +19,7 @@ async function tg(token:string,method:string,body:unknown){const r=await fetch(`
 async function tgDocument(token:string,chatId:string,bytes:Uint8Array,fileName:string,caption:string,replyMarkup:any){
   const form=new FormData();
   form.append("chat_id",chatId);
-  form.append("document",new Blob([bytes],{type:"text/html"}),fileName);
+  const payload=bytes.buffer.slice(bytes.byteOffset,bytes.byteOffset+bytes.byteLength) as ArrayBuffer;\n  form.append("document",new Blob([payload],{type:"text/html"}),fileName);
   form.append("caption",caption);
   form.append("reply_markup",JSON.stringify(replyMarkup));
   const r=await fetch(`https://api.telegram.org/bot${token}/sendDocument`,{method:"POST",body:form,signal:AbortSignal.timeout(30000)});
@@ -464,7 +464,7 @@ function httpsUrl(v:any){
   const s=String(v??"").trim();
   try{const u=new URL(s);return u.protocol==="https:"?u.toString():null}catch{return null}
 }
-async function sendVisualPreviews(token:string,chatId:number,d:any){
+async function sendVisualPreviews(token:string,chatId:string|number,d:any){
   const vis=d?.visual_context??{},pano=vis?.panoramax??{},oam=vis?.openaerialmap??{};
   const rows:any[]=[];
   const p=(Array.isArray(pano?.items)?pano.items:[]).find((x:any)=>httpsUrl(x?.thumbnail));
