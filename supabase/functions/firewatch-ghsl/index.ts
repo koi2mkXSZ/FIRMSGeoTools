@@ -56,8 +56,8 @@ async function loadTile(product:Product,t:TileRef,cache:Map<string,Promise<Loade
       const name=Object.keys(files).find(x=>x.toLowerCase().endsWith(".tif"));
       if(!name)throw new Error(`${product} R${t.r}C${t.c}: GeoTIFF missing`);
       const b=files[name];
-      const ab=b.buffer.slice(b.byteOffset,b.byteOffset+b.byteLength);
-      const tif=await fromArrayBuffer(ab);
+      const copy=new Uint8Array(b.byteLength);copy.set(b);
+      const tif=await fromArrayBuffer(copy.buffer);
       const image=await tif.getImage();
       return {product,r:t.r,c:t.c,url,bbox:image.getBoundingBox(),width:image.getWidth(),height:image.getHeight(),image};
     })();
@@ -174,7 +174,7 @@ Deno.serve(async(req:Request)=>{
   const ids=candidates.map((e:any)=>e.id);
   const {data:rows,error:ce}=ids.length?await sb.from("ghsl_event_cache").select("*").in("fire_event_id",ids):{data:[],error:null} as any;
   if(ce)return json({ok:false,error:ce.message},502);
-  const oldMap=new Map((rows??[]).map((x:any)=>[String(x.fire_event_id),x]));
+  const oldMap=new Map<string,any>((rows??[]).map((x:any)=>[String(x.fire_event_id),x] as [string,any]));
   const prior=(await sb.from("system_state").select("value").eq("key","monitor_ghsl").maybeSingle()).data?.value??{};
 
   let hits=0,attempted=0,refreshed=0,failed=0;
