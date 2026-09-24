@@ -452,6 +452,32 @@ async function deepOsintText(sb:any,q?:string){
   lines.push("","Корреляция контекстная и не устанавливает причинность или атрибуцию.");
   return lines.join("\n").slice(0,3900);
 }
+async function deepOsintData(sb:any,q?:string){
+  const {data,error}=await sb.rpc("firewatch_deep_osint",{p_query:q?.trim()||null})
+    .abortSignal(AbortSignal.timeout(7000));
+  if(error)throw error;
+  return data;
+}
+function httpsUrl(v:any){
+  const s=String(v??"").trim();
+  try{const u=new URL(s);return u.protocol==="https:"?u.toString():null}catch{return null}
+}
+async function sendVisualPreviews(token:string,chatId:number,d:any){
+  const vis=d?.visual_context??{},pano=vis?.panoramax??{},oam=vis?.openaerialmap??{};
+  const rows:any[]=[];
+  const p=(Array.isArray(pano?.items)?pano.items:[]).find((x:any)=>httpsUrl(x?.thumbnail));
+  if(p)rows.push({source:"Panoramax",photo:httpsUrl(p.thumbnail),original:httpsUrl(p.image_url)??httpsUrl(p.self_url),caption:`🖼 Panoramax${p.distance_m!=null?" • "+Math.round(Number(p.distance_m))+" м":""}${p.datetime?" • "+String(p.datetime).slice(0,10):""}\nStreet-level visual reference`});
+  const o=(Array.isArray(oam?.items)?oam.items:[]).find((x:any)=>httpsUrl(x?.thumbnail));
+  if(o)rows.push({source:"OpenAerialMap",photo:httpsUrl(o.thumbnail),original:httpsUrl(o.self_url)??httpsUrl(o.image_href),caption:`🛰 OpenAerialMap${o.datetime?" • "+String(o.datetime).slice(0,10):""}${o.platform?" • "+String(o.platform):""}${o.gsd!=null?" • GSD "+String(o.gsd):""}\nAerial visual reference`});
+  for(const x of rows.slice(0,2)){
+    try{
+      const body:any={chat_id:chatId,photo:x.photo,caption:String(x.caption).slice(0,900)};
+      if(x.original)body.reply_markup={inline_keyboard:[[{text:"Открыть оригинал",url:x.original}]]};
+      await tg(token,"sendPhoto",body);
+    }catch(e){console.error("admin visual preview failed:",x.source,e instanceof Error?e.message:String(e))}
+  }
+}
+
 async function priorityText(sb:any,hours=24,minScore=0){
   const h=Math.max(1,Math.min(8760,Number(hours)||24));
   const min=Math.max(0,Math.min(100,Number(minScore)||0));
@@ -771,6 +797,7 @@ async function processAdminUpdate(sb:any,token:string,adminId:string,u:any){
   if(low.startsWith("/deeposint")){
     const arg=raw.split(/\s+/).slice(1).join(" ").trim();
     await tg(token,"sendMessage",{chat_id:adminId,text:await deepOsintText(sb,arg),reply_markup:panelKeyboard});
+    try{await sendVisualPreviews(token,adminId,await deepOsintData(sb,arg))}catch(e){console.error("admin deep visual failed:",e instanceof Error?e.message:String(e))}
     return true;
   }
   if(low.startsWith("/priority")){

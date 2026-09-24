@@ -185,6 +185,42 @@ function deepOsintText(d:any){
   lines.push("","Корреляция контекстная: близость по времени/месту/тексту не доказывает причинность.");
   return lines.join("\n").slice(0,3900);
 }
+function httpsUrl(v:any){
+  const s=String(v??"").trim();
+  try{const u=new URL(s);return u.protocol==="https:"?u.toString():null}catch{return null}
+}
+async function sendVisualPreviews(token:string,chatId:number,d:any){
+  const vis=d?.visual_context??{},pano=vis?.panoramax??{},oam=vis?.openaerialmap??{};
+  const candidates:any[]=[];
+  const pItems:any[]=Array.isArray(pano?.items)?pano.items:[];
+  const p=pItems.find((x:any)=>httpsUrl(x?.thumbnail));
+  if(p){
+    candidates.push({
+      source:"Panoramax",photo:httpsUrl(p.thumbnail),
+      original:httpsUrl(p.image_url)??httpsUrl(p.self_url),
+      caption:"🖼 Panoramax"+(p.distance_m!=null?" • "+Math.round(Number(p.distance_m))+" м":"")+(p.datetime?" • "+String(p.datetime).slice(0,10):"")+"\nStreet-level visual reference • не является автоматическим подтверждением события."
+    });
+  }
+  const oItems:any[]=Array.isArray(oam?.items)?oam.items:[];
+  const o=oItems.find((x:any)=>httpsUrl(x?.thumbnail));
+  if(o){
+    candidates.push({
+      source:"OpenAerialMap",photo:httpsUrl(o.thumbnail),
+      original:httpsUrl(o.self_url)??httpsUrl(o.image_href),
+      caption:"🛰 OpenAerialMap"+(o.datetime?" • "+String(o.datetime).slice(0,10):"")+(o.platform?" • "+String(o.platform):"")+(o.gsd!=null?" • GSD "+String(o.gsd):"")+"\nAerial visual reference • не является автоматическим подтверждением события."
+    });
+  }
+  for(const x of candidates.slice(0,2)){
+    try{
+      const body:any={chat_id:chatId,photo:x.photo,caption:String(x.caption).slice(0,900)};
+      if(x.original)body.reply_markup={inline_keyboard:[[{text:"Открыть оригинал",url:x.original}]]};
+      await tg(token,"sendPhoto",body);
+    }catch(e){
+      console.error("visual preview failed:",x.source,e instanceof Error?e.message:String(e));
+    }
+  }
+}
+
 async function priorityEvents(sb:any,hours=24,minScore=0){
   const {data,error}=await sb.rpc("firewatch_priority_events",{p_hours:hours,p_limit:12,p_min_score:minScore})
     .abortSignal(AbortSignal.timeout(5000));
@@ -664,6 +700,7 @@ Deno.serve(async(req:Request)=>{
       const d=await deepOsint(sb,q);
       await countRequest(sb,userId);
       await tg(token,"sendMessage",{chat_id:chatId,text:deepOsintText(d),reply_markup:activeKeyboard,disable_web_page_preview:true});
+      await sendVisualPreviews(token,chatId,d);
       return json({ok:true,processed:1});
     }
 

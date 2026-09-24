@@ -26,7 +26,10 @@ function pickLink(x:any,rel:string){
   return (Array.isArray(x?.links)?x.links:[]).find((l:any)=>l?.rel===rel)?.href??null;
 }
 function pickThumb(x:any){
-  return x?.assets?.thumbnail?.href??x?.properties?.["geovisio:thumbnail"]??pickLink(x,"thumbnail")??null;
+  return x?.assets?.thumbnail?.href??x?.assets?.thumb?.href??x?.properties?.["geovisio:thumbnail"]??pickLink(x,"thumbnail")??null;
+}
+function pickPanoramaxImage(x:any){
+  return x?.assets?.hd?.href??x?.assets?.sd?.href??x?.properties?.["geovisio:image"]??null;
 }
 async function panoramax(lat:number,lon:number){
   const d=0.008;
@@ -49,6 +52,7 @@ async function panoramax(lat:number,lon:number){
         producer:f?.properties?.["geovisio:producer"]??null,
         horizontal_accuracy_m:f?.properties?.["quality:horizontal_accuracy"]??null,
         thumbnail:pickThumb(f),
+        image_url:pickPanoramaxImage(f),
         self_url:pickLink(f,"self")
       });
     }
@@ -67,13 +71,13 @@ async function oam(lat:number,lon:number){
     return {
       item_id:f?.id??null,
       datetime:p.datetime??p.start_datetime??null,
-      platform:p.platform??null,
+      platform:p["oam:platform_type"]??p.platform??null,
       gsd:p.gsd??null,
-      provider:p.provider??p.providers??null,
+      provider:p["oam:producer_name"]??p.provider??p.providers??null,
       bbox:b,
       contains_event:b&&b.length>=4?lon>=Number(b[0])&&lon<=Number(b[2])&&lat>=Number(b[1])&&lat<=Number(b[3]):null,
       thumbnail:f?.assets?.thumbnail?.href??null,
-      image_href:f?.assets?.image?.href??null,
+      image_href:f?.assets?.visual?.href??f?.assets?.image?.href??null,
       self_url:pickLink(f,"self")
     };
   });
