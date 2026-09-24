@@ -513,7 +513,9 @@ async function bootstrapWebhook(sb:any,token:string,secret:string,url:string){
     {command:"latest",description:"Последние события"},
     {command:"priority",description:"События по приоритету"},
     {command:"search",description:"Поиск по ID или региону"},
-    {command:"objects",description:"Объекты по области и категории"},
+    {command:"objects",description:"Объекты по области / фильтры / multi"},
+    {command:"objects_count",description:"Количество объектов без списка"},
+    {command:"objects_explain",description:"Показать интерпретацию запроса"},
     {command:"objects_csv",description:"CSV объектов области"},
     {command:"event",description:"Карточка события"},
     {command:"dossier",description:"OSINT-досье события"},
@@ -568,13 +570,14 @@ function regionalCsv(d:any){
   return "\uFEFF"+[cols,...rows].map(r=>r.map(cell).join(",")).join("\r\n");
 }
 function regionalSearchText(d:any){
-  const s=d?.summary??{},res=d?.resolution??s?.resolution??{},xs:any[]=Array.isArray(d?.objects)?d.objects:[];
-  const mode=res?.mode==="generic"?"generic OSM":res?.mode==="semantic_hint"?"OSM semantic":res?.mode==="fuzzy"?"fuzzy → "+String(d?.category_label??d?.category_key??""):res?.mode==="qualified"?"category + filter":"category";
+  const s=d?.summary??{},res=d?.resolution??s?.resolution??{},xs:any[]=Array.isArray(d?.objects)?d.objects:[],filters=res?.filters??s?.filters??{};
+  const mode=res?.mode==="multi"?"multi-category":res?.mode==="generic"?"generic OSM":res?.mode==="semantic_hint"?"OSM semantic":res?.mode==="fuzzy"?"fuzzy":res?.mode==="qualified"?"category + filter":"category";
+  const filterText=Object.entries(filters).filter(([,v])=>v).map(([k,v])=>k+"="+String(v)).join(" • ");
   const lines=[
     "🏭 REGIONAL OBJECT SEARCH",
     String(d?.oblast?.name_uk??d?.oblast_name??"—")+" • "+String(d?.category_label??d?.category_key??"—"),
     "Найдено: "+Number(s.resolved_objects??xs.length)+" • multi-source "+Number(s.multi_source??0)+" • status "+String(d?.status??"—")+(d?.cached?" • cache":" • fresh"),
-    "Режим: "+mode+(res?.input?" • запрос: "+String(res.input):""),
+    "Режим: "+mode+(res?.input?" • запрос: "+String(res.input):"")+(filterText?"\nФильтры: "+filterText:""),
     "Источники: OSM "+Number(s.osm_objects??0)+" • Overture "+Number(s.overture_objects??0)+" • Wikidata "+Number(s.wikidata_objects??0),
     ""
   ];
@@ -583,8 +586,20 @@ function regionalSearchText(d:any){
   if(!xs.length)lines.push("","Совпадений в подключённых публичных данных не найдено.");
   if(Boolean(s.truncated))lines.push("","⚠️ Достигнут лимит источника/выдачи: результат может быть неполным.");
   if(Array.isArray(d?.errors)&&d.errors.length)lines.push("","⚠️ Partial: "+d.errors.slice(0,3).join(" | "));
-  if(res?.mode==="generic")lines.push("","ℹ️ Свободный поиск: совпадение по безопасному набору публичных OSM name/tag полей; формулировка влияет на полноту.");
   lines.push("","Данные — инвентаризация публичных источников; полнота зависит от картографирования и актуальности источников.");
+  return lines.join("\n").slice(0,3900);
+}
+function regionalCountText(d:any){
+  const s=d?.summary??{},r=d?.resolution??s?.resolution??{},f=r?.filters??s?.filters??{};
+  const fs=Object.entries(f).filter(([,v])=>v).map(([k,v])=>k+"="+String(v)).join(" • ");
+  return ["🔢 REGIONAL OBJECT COUNT",String(d?.oblast?.name_uk??d?.oblast_name??"—")+" • "+String(d?.category_label??d?.category_key??"—"),"Найдено: "+Number(s.resolved_objects??0)+" • status "+String(d?.status??"—")+(d?.cached?" • cache":" • fresh"),"Режим: "+String(r?.mode??"—")+(fs?"\nФильтры: "+fs:""),"OSM candidates: "+Number(s.osm_objects??0)+(s.truncated?" • ⚠️ truncated":"")].join("\n").slice(0,3900);
+}
+function regionalExplainText(d:any){
+  const r=d?.resolution??{},cats=Array.isArray(r.categories)?r.categories:[],f=r.filters??{},sp=d?.source_plan??{};
+  const lines=["🧠 REGIONAL QUERY EXPLAIN",String(d?.oblast?.name_uk??"—")+" • "+String(d?.oblast?.code??"—"),"Режим: "+String(r.mode??"—"),"Интерпретация:"];
+  for(const x of cats)lines.push("• "+String(x.label??x.key??"—")+" • "+String(x.mode??"—")+" • confidence "+Math.round(Number(x.confidence??0)*100)+"%");
+  const fs=Object.entries(f).filter(([,v])=>v);if(fs.length){lines.push("","Фильтры:");for(const [k,v] of fs)lines.push("• "+k+": "+String(v))}
+  lines.push("","План: "+String(sp.primary??"—")+" • polygon "+(sp.polygon_filter?"yes":"no")+" • cache "+Number(sp.cache_ttl_hours??0)+"h");
   return lines.join("\n").slice(0,3900);
 }
 function regionalErrorText(e:any){
@@ -1154,6 +1169,20 @@ Deno.serve(async(req:Request)=>{
     }
     if(low==="🛰 satellite"){
       await tg(token,"sendMessage",{chat_id:chatId,text:"🛰 Satellite Evidence\n\nУкажите ID события:\n/satellite 19be809d",reply_markup:activeKeyboard});
+      return json({ok:true,processed:1});
+    }
+    if(low.startsWith("/objects_explain")){
+      const q=raw.split(/\s+/).slice(1).join(" ").trim();
+      if(!q){await tg(token,"sendMessage",{chat_id:chatId,text:"Использование: /objects_explain <область> <объект/категория> [фильтры]",reply_markup:activeKeyboard});return json({ok:true,processed:1})}
+      try{const d=await regionalSearchRequest({query:q,explain:true});await countRequest(sb,userId);await tg(token,"sendMessage",{chat_id:chatId,text:regionalExplainText(d),reply_markup:activeKeyboard})}
+      catch(e){await tg(token,"sendMessage",{chat_id:chatId,text:regionalErrorText(e),reply_markup:activeKeyboard})}
+      return json({ok:true,processed:1});
+    }
+    if(low.startsWith("/objects_count")){
+      const q=raw.split(/\s+/).slice(1).join(" ").trim();
+      if(!q){await tg(token,"sendMessage",{chat_id:chatId,text:"Использование: /objects_count <область> <объект/категория> [фильтры]",reply_markup:activeKeyboard});return json({ok:true,processed:1})}
+      try{const d=await regionalSearchRequest({query:q,count_only:true});await countRequest(sb,userId);await tg(token,"sendMessage",{chat_id:chatId,text:regionalCountText(d),reply_markup:activeKeyboard})}
+      catch(e){await tg(token,"sendMessage",{chat_id:chatId,text:regionalErrorText(e),reply_markup:activeKeyboard})}
       return json({ok:true,processed:1});
     }
     if(low.startsWith("/objects_csv")){
