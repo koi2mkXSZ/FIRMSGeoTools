@@ -1,4 +1,4 @@
-import {OBLAST_DEFINITIONS,expandedAliases,normalizeRegionQuery,resolveOblastRow,validateOblastAliases} from "./region_aliases.ts";
+import {OBLAST_DEFINITIONS,expandedAliases,normalizeRegionQuery,resolveOblastRow,splitRegionObjectQuery,validateOblastAliases} from "./region_aliases.ts";
 
 function assert(x:unknown,msg:string){if(!x)throw new Error(msg)}
 const rows=OBLAST_DEFINITIONS.map((d,i)=>({id:i+1,code:d.code,name_uk:d.uk,name_en:d.en}));
@@ -50,5 +50,17 @@ Deno.test("every non-city region accepts oblast/region suffixes",()=>{
  for(const d of OBLAST_DEFINITIONS.filter(x=>x.kind!=="city")){
   const qs=[d.ru+" область",d.uk+" область",d.en+" region",d.en+" oblast"];
   for(const q of qs)assert(resolveOblastRow(rows,q)?.code===d.code,`${q} must resolve to ${d.code}`);
+ }
+});
+
+
+Deno.test("every region alias can wrap an unknown object query",()=>{
+ for(const d of OBLAST_DEFINITIONS){
+  for(const alias of expandedAliases(d)){
+   for(const q of [alias+" нефтебаза","нефтебаза "+alias]){
+    const got=splitRegionObjectQuery(q);
+    assert(got?.oblast_code===d.code&&got.object_query.length>0,`${q} -> ${JSON.stringify(got)}`);
+   }
+  }
  }
 });
