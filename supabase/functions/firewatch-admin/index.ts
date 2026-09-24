@@ -664,6 +664,44 @@ async function setClientStatus(sb:any,id:string,status:"active"|"blocked"){
   return data;
 }
 
+async function areaIntelRequest(payload:any){
+  const u=Deno.env.get("SUPABASE_URL"),k=Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
+  if(!u||!k)throw new Error("missing Supabase env");
+  const r=await fetch(u+"/functions/v1/firewatch-area-intel",{
+    method:"POST",headers:{"content-type":"application/json","authorization":"Bearer "+k},
+    body:JSON.stringify(payload),signal:AbortSignal.timeout(45000)
+  });
+  const t=await r.text();let d:any;try{d=JSON.parse(t)}catch{throw new Error("Area Intel invalid response")}
+  if(!r.ok||!d?.ok)throw new Error(String(d?.error??("HTTP "+r.status)));return d;
+}
+function areaIntelText(d:any){
+  const s=d?.summary??{},counts=s.by_category??{},b=d?.buildings??{},near=d?.nearest??{},src=d?.source_status??{};
+  const labels:any={energy:"энергетика",industrial:"промышленность",government:"административные",emergency:"экстренные службы",healthcare:"медицина",education:"образование",transport:"транспорт",logistics:"логистика",water:"вода",telecom:"телеком",commercial:"коммерция",residential:"жилые",cultural:"культура",public_service:"общественные службы",storage:"хранение"};
+  const order=["energy","industrial","government","emergency","healthcare","education","transport","logistics","water","telecom","commercial","residential","cultural","public_service","storage"];
+  const lines=[
+    "🧭 AREA OSINT",
+    "Центр: "+Number(d.latitude).toFixed(5)+", "+Number(d.longitude).toFixed(5)+" • радиус "+Number(d.radius_m)+" м",
+    "OSM/Postpass: "+String(src.osm_postpass??"—")+" • Overture: "+String(src.overture??"—")+(src.overture_mirror_lag?" • mirror lag":""),
+    "",
+    "🏗 Инфраструктурный профиль"
+  ];
+  for(const k of order)if(Number(counts[k]??0)>0)lines.push("• "+(labels[k]??k)+": "+Number(counts[k]));
+  lines.push("• building footprints: "+Number(b.building_count??0)+" • именованных "+Number(b.named_count??0)+" • non-residential tagged "+Number(b.nonresidential_tagged_count??0));
+  lines.push("","📍 Ближайшие объекты");
+  for(const k of order){
+    const x=near[k];if(!x)continue;
+    lines.push("• "+(labels[k]??k)+": "+String(x.name??"—")+" • "+Math.round(Number(x.distance_m??0))+" м"+(x.subcategory?" • "+String(x.subcategory):""));
+  }
+  const ov:any[]=Array.isArray(s.overture_features)?s.overture_features:[];
+  if(ov.length){
+    lines.push("","🗺 Overture cross-source:");
+    for(const x of ov.slice(0,5))lines.push("• "+String(x.name??x.subcategory??"—")+" • "+Math.round(Number(x.distance_m??0))+" м • "+String(x.subcategory??x.category??""));
+    lines.push("snapshot "+String(src.overture_mirror_release??"—")+" • official latest "+String(src.overture_official_latest??"—"));
+  }
+  lines.push("","Контекст описательный: без vulnerability/target/access-route scoring.");
+  return lines.join("\n").slice(0,3900);
+}
+
 async function latencyText(sb:any,eventId?:string){
   if(eventId?.trim()){
     const {data,error}=await sb.rpc("firewatch_event_latency",{p_query:eventId.trim()});
@@ -880,6 +918,18 @@ async function processAdminUpdate(sb:any,token:string,adminId:string,u:any){
     const arg=raw.split(/\s+/)[1]??"24";
     await tg(token,"sendMessage",{chat_id:adminId,text:await analyticsText(sb,Number(arg)),reply_markup:panelKeyboard});
     return true;
+  }
+  if(low.startsWith("/infra")){
+    const p=raw.split(/\s+/),id=String(p[1]??"").trim(),radius=Math.max(250,Math.min(10000,Number(p[2]??2000)||2000));
+    if(!id){await tg(token,"sendMessage",{chat_id:adminId,text:"Использование: /infra <event-id> [radius_m]\nПример: /infra 19be809d 2000",reply_markup:panelKeyboard});return true}
+    const d=await areaIntelRequest({event_id:id,radius_m:radius});
+    await tg(token,"sendMessage",{chat_id:adminId,text:areaIntelText(d),reply_markup:panelKeyboard,disable_web_page_preview:true});return true
+  }
+  if(low.startsWith("/area")){
+    const p=raw.split(/\s+/),lat=Number(p[1]),lon=Number(p[2]),radius=Math.max(250,Math.min(10000,Number(p[3]??2000)||2000));
+    if(!Number.isFinite(lat)||!Number.isFinite(lon)){await tg(token,"sendMessage",{chat_id:adminId,text:"Использование: /area <lat> <lon> [radius_m]\nПример: /area 46.61212 31.55511 2000",reply_markup:panelKeyboard});return true}
+    const d=await areaIntelRequest({lat,lon,radius_m:radius});
+    await tg(token,"sendMessage",{chat_id:adminId,text:areaIntelText(d),reply_markup:panelKeyboard,disable_web_page_preview:true});return true
   }
   if(low.startsWith("/latency")){const arg=raw.split(/\s+/).slice(1).join(" ").trim();await tg(token,"sendMessage",{chat_id:adminId,text:await latencyText(sb,arg||undefined),reply_markup:panelKeyboard});return true}
   if(low.startsWith("/review_accept")||low.startsWith("/review_reject")||low.startsWith("/review_more")){
