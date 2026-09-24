@@ -182,3 +182,112 @@ The response exposes `source_status`, `errors`, and `truncated` so callers can d
 ## Status
 
 **CLOSED / production-ready — 2026-09-24.**
+
+
+## Stage 43.0.1 — Regional alias hardening
+
+Regional name resolution is now protected by a canonical 27-region registry and exhaustive alias validation.
+
+### Canonical coverage
+
+The resolver covers all 27 rows currently present in `public.oblasts`:
+
+- 24 oblasts;
+- Autonomous Republic of Crimea;
+- Kyiv;
+- Sevastopol.
+
+Each canonical region definition includes Ukrainian, Russian and English forms plus common transliterations/legacy spellings.
+
+Generated variants cover suffix/prefix forms such as:
+
+- `область`;
+- `обл.`;
+- `області`;
+- `region`;
+- `oblast`.
+
+The current production alias index contains **1631 normalized variants**.
+
+### Ambiguity protection
+
+Exact normalized aliases are indexed before fuzzy matching.
+
+If an alias maps to more than one region, it is treated as ambiguous rather than silently selecting a region.
+
+Fuzzy fallback requires:
+
+- score >= 0.60;
+- at least 0.08 separation from the second-best region.
+
+Special regression coverage explicitly distinguishes:
+
+- `Киевская область` / `Київська область` / `Kyiv region` -> `UA32`;
+- `Киев` / `Київ` / `Kyiv` -> `UA80`.
+
+### CI guard
+
+`region_aliases_test.ts` runs in Clean Install CI and verifies:
+
+- exactly 27 canonical region definitions;
+- no duplicate region codes;
+- every generated alias resolves to the expected code;
+- no normalized alias collisions;
+- RU / UK / EN primary names for every region;
+- common Russian legacy spellings;
+- suffix/prefix variants;
+- Kyiv city vs Kyiv oblast disambiguation.
+
+### Runtime guard
+
+`firewatch-regional-search` supports authenticated self-test:
+
+`{"self_test":"oblast_aliases"}`
+
+Production acceptance result:
+
+- HTTP 200;
+- `ok=true`;
+- DB regions: 27;
+- alias regions: 27;
+- normalized variants: 1631;
+- missing mappings: 0;
+- unknown codes: 0;
+- duplicate aliases: 0;
+- failed resolutions: 0.
+
+The self-test writes `system_state.monitor_regional_aliases`.
+
+### Automatic monitoring
+
+Migration `0039_stage43_0_1_regional_alias_health.sql` adds a service-role-only cron configurator.
+
+Production job:
+
+- name: `firewatch-regional-alias-health`;
+- schedule: `19 */6 * * *`;
+- active: true.
+
+The watchdog reads `monitor_regional_aliases` and raises:
+
+- `REGIONAL_ALIAS_STALE` if no self-test succeeds for more than 12 hours;
+- `REGIONAL_ALIAS_ERROR` if DB codes, aliases or resolution checks diverge.
+
+Sequential production watchdog smoke after the self-test returned no `REGIONAL_ALIAS_*` issue.
+
+### Security
+
+`firewatch_configure_regional_alias_health_cron(text)` permissions:
+
+- anon EXECUTE: false;
+- authenticated EXECUTE: false;
+- service_role EXECUTE: true.
+
+Supabase Security Advisor returned no finding related to the regional-alias health guard.
+
+### Production versions
+
+- `firewatch-regional-search`: ACTIVE v8;
+- `firewatch-watchdog`: ACTIVE v38;
+- schema version: 39;
+- Clean Install CI for runtime-health commit `de49ae4838c21843b0a7fe8f26e11db6e31ec802`: SUCCESS (#36016268263).
