@@ -1,7 +1,7 @@
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "@supabase/supabase-js";
 import { diceSimilarity as dice, normalizeRegionQuery as norm, resolveOblastRow, splitRegionObjectQuery, validateOblastAliases } from "./region_aliases.ts";
-import { REGIONAL_SPECS as SPECS, type RegionalSpec as Spec, parseRegionalQuery, resolveCategoryIntent, validateRegionalCategories } from "./regional_categories.ts";
+import { REGIONAL_SPECS as SPECS, type RegionalSpec as Spec, buildFilterPredicate, extractRegionalFilters, mergeFilters, multiKey, normalizeFilters, parseRegionalQuery, resolveCategoryList, splitObjectExpression, validateRegionalCategories } from "./regional_categories.ts";
 
 const POSTPASS="https://postpass.geofabrik.de/api/interpreter";
 const FUSED="https://www.fused.io/server/v1/realtime-shared/UDF_Overture_Maps_Example/run/tiles";
@@ -63,39 +63,115 @@ Deno.serve(async(req:Request)=>{
   const sb=createClient(base,key,{auth:{persistSession:false}}),bearer=req.headers.get("authorization")??"",cron=req.headers.get("x-cron-secret")??"";
   let authorized=bearer==="Bearer "+key;if(!authorized&&cron){const {data}=await sb.rpc("verify_firewatch_cron_secret",{p_secret:cron});authorized=data===true}if(!authorized)return json({ok:false,error:"unauthorized"},401);
   const body:any=await req.json().catch(()=>({}));
-  if(body.self_test==="oblast_aliases"){const report=validateOblastAliases(await oblastRows(sb)),categories=validateRegionalCategories(),ok=report.ok&&categories.ok,now=new Date().toISOString(),monitor={status:ok?"active":"error",last_check:now,...report,category_ok:categories.ok,category_count:categories.category_count,category_alias_count:categories.alias_count,generic_hint_count:categories.generic_hint_count,generic_hint_alias_count:categories.generic_hint_alias_count,category_duplicate_aliases:categories.duplicate_aliases,generic_hint_duplicate_aliases:categories.duplicate_hint_aliases};const {error:me}=await sb.from("system_state").upsert({key:"monitor_regional_aliases",value:monitor,updated_at:now});if(me)throw me;const {ok:_aliasOk,...aliasReport}=report;return json({self_test:"oblast_aliases",ok,...aliasReport,category_validation:categories},ok?200:500)}
-  if(body.self_test==="regional_categories"){const report=validateRegionalCategories();return json({self_test:"regional_categories",...report},report.ok?200:500)}
-  const rawQuery=String(body.query??"").trim(),knownParsed=rawQuery?parseRegionalQuery(rawQuery):null,split=rawQuery?splitRegionObjectQuery(rawQuery):null;
-  const categoryInput=knownParsed?.category??split?.object_query??body.category,oblastInput=knownParsed?.oblast??split?.oblast_code??body.oblast;
-  if(rawQuery&&!knownParsed&&!split)return json({ok:false,error:"oblast not found in free-form query",hint:"Use <oblast> <object>, e.g. Полтавская область нефтебаза"},404);
-  const resolution=resolveCategoryIntent(categoryInput);
-  if(resolution.mode==="ambiguous"||!resolution.spec){
-    const labels=(resolution.suggestions??[]).map(x=>x.label);
-    return json({ok:false,error:"ambiguous category"+(labels.length?": "+labels.join(" / "):""),query:String(categoryInput??""),suggestions:resolution.suggestions??[]},409);
+  if(body.self_test==="oblast_aliases"){
+    const report=validateOblastAliases(await oblastRows(sb)),categories=validateRegionalCategories(),ok=report.ok&&categories.ok,now=new Date().toISOString();
+    const monitor={status:ok?"active":"error",last_check:now,...report,category_ok:categories.ok,category_count:categories.category_count,category_alias_count:categories.alias_count,generic_hint_count:categories.generic_hint_count,generic_hint_alias_count:categories.generic_hint_alias_count,category_duplicate_aliases:categories.duplicate_aliases,generic_hint_duplicate_aliases:categories.duplicate_hint_aliases};
+    const {error:me}=await sb.from("system_state").upsert({key:"monitor_regional_aliases",value:monitor,updated_at:now});if(me)throw me;
+    const {ok:_aliasOk,...aliasReport}=report;return json({self_test:"oblast_aliases",ok,...aliasReport,category_validation:categories},ok?200:500);
   }
-  const spec=resolution.spec;
+  if(body.self_test==="regional_categories"){const report=validateRegionalCategories();return json({self_test:"regional_categories",...report},report.ok?200:500)}
+
+  const rawQuery=String(body.query??"").trim();
+  const extracted=extractRegionalFilters(rawQuery);
+  const explicitFilters=normalizeFilters(body.filters);
+  const filters=mergeFilters(extracted.filters,explicitFilters);
+
+  let oblastInput:any=body.oblast,categoryInputs:string[]=[];
+  if(extracted.text){
+    const parts=splitObjectExpression(extracted.text);
+    const first=String(parts[0]??"").trim();
+    const known=first?parseRegionalQuery(first):null,split=first?splitRegionObjectQuery(first):null;
+    if(!known&&!split)return json({ok:false,error:"oblast not found in free-form query",hint:"Use <oblast> <object>, e.g. Полтавская область нефтебаза"},404);
+    oblastInput=known?.oblast??split?.oblast_code;
+    const firstCategory=known?.category??split?.object_query;
+    if(firstCategory)categoryInputs.push(String(firstCategory));
+    categoryInputs.push(...parts.slice(1));
+  }else if(Array.isArray(body.categories)){
+    categoryInputs=body.categories.map((x:any)=>String(x??"").trim()).filter(Boolean);
+  }else{
+    categoryInputs=splitObjectExpression(body.category??"");
+  }
+
+  if(!categoryInputs.length)return json({ok:false,error:"missing object/category"},400);
+  const plan=resolveCategoryList(categoryInputs);
+  if(plan.ambiguous){
+    const labels=(plan.ambiguous.suggestions??[]).map(x=>x.label);
+    return json({ok:false,error:"ambiguous category"+(labels.length?": "+labels.join(" / "):""),query:plan.ambiguous.input,suggestions:plan.ambiguous.suggestions??[]},409);
+  }
+  if(!plan.resolutions.length)return json({ok:false,error:"object/category could not be resolved"},400);
+
   const oblast=await resolveOblast(sb,oblastInput);if(!oblast)return json({ok:false,error:"oblast not found"},404);
+  const specs=plan.resolutions.map(x=>x.spec!).filter(Boolean);
+  const filterPredicate=buildFilterPredicate(filters);
+  const labels=specs.map(x=>x.label);
+  const hasFilters=Object.values(filters).some(Boolean);
+  const combinedKey=specs.length===1&&!hasFilters?specs[0].key:"plan_"+multiKey(plan.resolutions,filters);
+  const spec:Spec={
+    key:combinedKey,
+    label:labels.join(" + "),
+    aliases:[],
+    osm:"("+specs.map(x=>"("+x.osm+")").join(" OR ")+") AND ("+filterPredicate+")",
+    overture:[...new Set(specs.flatMap(x=>x.overture))],
+    overtureTypes:[...new Set(specs.flatMap(x=>x.overtureTypes))]
+  };
+  const resolutionInfo={
+    mode:plan.resolutions.length>1?"multi":plan.resolutions[0].mode,
+    input:rawQuery||categoryInputs.join(" + "),
+    confidence:Number(Math.min(...plan.resolutions.map(x=>x.confidence)).toFixed(3)),
+    categories:plan.resolutions.map(x=>({key:x.spec?.key,label:x.spec?.label,mode:x.mode,input:x.input,confidence:Number(x.confidence.toFixed(3)),qualifier:x.qualifier??null})),
+    filters
+  };
+
+  if(body.explain===true){
+    return json({
+      ok:true,explain:true,
+      oblast:{id:oblast.id,code:oblast.code,name_uk:oblast.name_uk,name_en:oblast.name_en,bbox:oblast.bbox,center:oblast.center},
+      category_label:spec.label,
+      resolution:resolutionInfo,
+      source_plan:{primary:"OpenStreetMap/Postpass",wikidata:"QID enrichment",overture:"not_applicable in region-wide mode",polygon_filter:true,cache_ttl_hours:12},
+      limits:{raw_candidates:RAW_LIMIT,output_objects:OUTPUT_LIMIT},
+      policy:"Explain mode does not query external object sources."
+    });
+  }
+
   const queryKey=String(oblast.code)+":"+spec.key;
   const {data:cached,error:ce}=await sb.from("regional_object_search_cache").select("*").eq("query_key",queryKey).maybeSingle();if(ce)throw ce;
   const age=Date.now()-Date.parse(String(cached?.queried_at??""));
   if(cached&&!body.refresh&&Number.isFinite(age)&&age<CACHE_MS){
     if(String(body.format??"").toLowerCase()==="csv")return new Response("\uFEFF"+toCsv(cached.objects??[]),{headers:{"content-type":"text/csv; charset=utf-8","content-disposition":'attachment; filename="'+spec.key+"-"+String(oblast.code)+'.csv"'}});
-    return json({ok:true,cached:true,...cached,category_label:spec.label,resolution:cached?.summary?.resolution??{mode:resolution.mode,input:resolution.input,confidence:resolution.confidence,matched_alias:resolution.matched_alias??null,qualifier:resolution.qualifier??null},oblast:{id:oblast.id,code:oblast.code,name_uk:oblast.name_uk,name_en:oblast.name_en,bbox:oblast.bbox,center:oblast.center}});
+    const payload={ok:true,cached:true,...cached,category_label:spec.label,resolution:cached?.summary?.resolution??resolutionInfo,oblast:{id:oblast.id,code:oblast.code,name_uk:oblast.name_uk,name_en:oblast.name_en,bbox:oblast.bbox,center:oblast.center}};
+    if(body.count_only===true)return json({...payload,count_only:true,objects:[]});
+    return json(payload);
   }
+
   const errors:string[]=[];let osmStatus="active",overture:any={status:"not_checked",features:[],tiles_total:0,tiles_ok:0},wd:any[]=[];
   const bbox=(oblast.bbox??[]).map(Number),geom=oblast.geometry;if(bbox.length!==4||!geom)throw new Error("oblast geometry unavailable");
   const osmRows:any[]=[];
-  try{const d=await postpass(postpassSql(bbox,spec));const raw=Array.isArray(d?.features)?d.features:[];if(raw.length>=RAW_LIMIT)errors.push("OSM candidate limit reached; result may be truncated");for(const f of raw){const p=f?.properties??{},t=p.tags??{},ctr=geoCenter(f);if(!ctr||!Number.isFinite(ctr[0])||!Number.isFinite(ctr[1])||!insideGeom(ctr[0],ctr[1],geom))continue;const ad=addrFromTags(t),qid=/^Q\d+$/.test(String(t?.wikidata??""))?String(t.wikidata):null;osmRows.push({source:"OpenStreetMap",source_id:String(p.osm_type??"")+":"+String(p.osm_id??""),name:osmName(t,spec),latitude:ctr[0],longitude:ctr[1],wikidata_qid:qid,brand:t?.brand?String(t.brand):null,operator:t?.operator?String(t.operator):null,settlement:ad.settlement,address:ad.address,tags:safeOsm(t)})}}catch(e){osmStatus="error";errors.push("OSM/Postpass: "+errText(e))}
+  try{
+    const d=await postpass(postpassSql(bbox,spec)),raw=Array.isArray(d?.features)?d.features:[];
+    if(raw.length>=RAW_LIMIT)errors.push("OSM candidate limit reached; result may be truncated");
+    for(const f of raw){
+      const p=f?.properties??{},t=p.tags??{},ctr=geoCenter(f);
+      if(!ctr||!Number.isFinite(ctr[0])||!Number.isFinite(ctr[1])||!insideGeom(ctr[0],ctr[1],geom))continue;
+      const ad=addrFromTags(t),qid=/^Q\d+$/.test(String(t?.wikidata??""))?String(t.wikidata):null;
+      osmRows.push({source:"OpenStreetMap",source_id:String(p.osm_type??"")+":"+String(p.osm_id??""),name:osmName(t,spec),latitude:ctr[0],longitude:ctr[1],wikidata_qid:qid,brand:t?.brand?String(t.brand):null,operator:t?.operator?String(t.operator):null,settlement:ad.settlement,address:ad.address,tags:safeOsm(t)});
+    }
+  }catch(e){osmStatus="error";errors.push("OSM/Postpass: "+errText(e))}
   try{overture=await overtureRegion(bbox,geom,spec);if(["error","partial","tile_limit"].includes(String(overture.status)))errors.push("Overture: "+overture.status+(overture.errors?.length?" • "+overture.errors[0]:""))}catch(e){overture={status:"error",features:[],tiles_total:0,tiles_ok:0};errors.push("Overture: "+errText(e))}
-  try{wd=await wikidataByQids(osmRows)}catch(e){errors.push("Wikidata: "+errText(e))}
+  if(body.count_only!==true){try{wd=await wikidataByQids(osmRows)}catch(e){errors.push("Wikidata: "+errText(e))}}
   const objects=resolve([...osmRows,...overture.features,...wd],spec).slice(0,OUTPUT_LIMIT);
   const truncated=osmRows.length>=RAW_LIMIT||objects.length>=OUTPUT_LIMIT;
-  const sources={osm_postpass:osmStatus,overture:overture.status,overture_reason:overture.reason??null,wikidata:wd.length?"active":"not_applicable",wikidata_mode:"qid_enrichment",overture_release:OVERTURE_RELEASE,overture_tiles_total:overture.tiles_total,overture_tiles_ok:overture.tiles_ok};
+  const sources={osm_postpass:osmStatus,overture:overture.status,overture_reason:overture.reason??null,wikidata:body.count_only===true?"skipped_count_only":wd.length?"active":"not_applicable",wikidata_mode:"qid_enrichment",overture_release:OVERTURE_RELEASE,overture_tiles_total:overture.tiles_total,overture_tiles_ok:overture.tiles_ok};
   const status=osmStatus!=="active"||["error","partial","tile_limit"].includes(String(overture.status))||truncated?"degraded":"active",now=new Date().toISOString();
-  const resolutionInfo={mode:resolution.mode,input:resolution.input,normalized:resolution.normalized,confidence:Number(resolution.confidence.toFixed(3)),matched_alias:resolution.matched_alias??null,qualifier:resolution.qualifier??null,base_category:spec.key.includes("__q_")?spec.key.split("__q_")[0]:spec.key.startsWith("generic_")||spec.key.startsWith("hint_")?null:spec.key};const summary={resolved_objects:objects.length,multi_source:objects.filter((x:any)=>x.source_count>1).length,osm_objects:osmRows.length,overture_objects:overture.features.length,wikidata_objects:wd.length,truncated,cache_ttl_hours:12,resolution:resolutionInfo};
+  const summary={resolved_objects:objects.length,multi_source:objects.filter((x:any)=>x.source_count>1).length,osm_objects:osmRows.length,overture_objects:overture.features.length,wikidata_objects:wd.length,truncated,cache_ttl_hours:12,resolution:resolutionInfo,filters,category_count:specs.length};
   const row={query_key:queryKey,oblast_id:oblast.id,oblast_code:oblast.code,oblast_name:oblast.name_uk,category_key:spec.key,queried_at:now,status,source_status:sources,summary,objects,errors,updated_at:now};
-  const {error:ue}=await sb.from("regional_object_search_cache").upsert(row,{onConflict:"query_key"});if(ue)throw ue;
+
+  if(body.count_only!==true){
+    const {error:ue}=await sb.from("regional_object_search_cache").upsert(row,{onConflict:"query_key"});if(ue)throw ue;
+  }
   if(String(body.format??"").toLowerCase()==="csv")return new Response("\uFEFF"+toCsv(objects),{headers:{"content-type":"text/csv; charset=utf-8","content-disposition":'attachment; filename="'+spec.key+"-"+String(oblast.code)+'.csv"'}});
-  return json({ok:true,cached:false,...row,category_label:spec.label,resolution:resolutionInfo,oblast:{id:oblast.id,code:oblast.code,name_uk:oblast.name_uk,name_en:oblast.name_en,bbox:oblast.bbox,center:oblast.center},policy:"Objects are public-source inventory candidates. Generic search matches a safe whitelist of public OSM names/tags and may miss objects whose public tagging uses different terminology. Cross-source matching is probabilistic unless an exact identifier is shared."});
+  const payload={ok:true,cached:false,...row,category_label:spec.label,resolution:resolutionInfo,oblast:{id:oblast.id,code:oblast.code,name_uk:oblast.name_uk,name_en:oblast.name_en,bbox:oblast.bbox,center:oblast.center},policy:"Objects are public-source inventory candidates. Filters and free-text matching use a safe whitelist of public OSM fields. Completeness depends on public source coverage and tagging."};
+  if(body.count_only===true)return json({...payload,count_only:true,objects:[]});
+  return json(payload);
  }catch(e){console.error("regional search error",errText(e));return json({ok:false,error:errText(e)},500)}
 });
