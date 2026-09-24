@@ -170,7 +170,7 @@ const FILTER_ALIASES:Record<string,keyof RegionalFilters>={
 };
 
 function safeFilterValue(v:unknown){return String(v??"").trim().replace(/^["']|["']$/g,"").slice(0,120)}
-function sqlText(v:string){return"'%"+norm(v).replace(/'/g,"''")+"%'"}
+function sqlText(v:string){return"'%"+String(v).toLowerCase().trim().replace(/'/g,"''")+"%'"}
 
 export function normalizeFilters(v:any):RegionalFilters{
  const out:RegionalFilters={};
