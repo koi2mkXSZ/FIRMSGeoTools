@@ -1,7 +1,7 @@
 {
   "name": "FIRMSGeoTools",
   "version": "1.0.0",
-  "schema_version": 38,
+  "schema_version": 39,
   "channel": "stable",
   "profile": "core",
   "migrations": [
@@ -46,7 +46,8 @@
     "0035_stage42_3_registry_fusion.sql",
     "0036_stage42_4_area_osint_report.sql",
     "0037_stage42_4_production_hardening.sql",
-    "0038_stage43_0_regional_object_search.sql"
+    "0038_stage43_0_regional_object_search.sql",
+    "0039_stage43_0_1_regional_alias_health.sql"
   ],
   "edge_functions": [
     "eumetsat-frp-inspect",
