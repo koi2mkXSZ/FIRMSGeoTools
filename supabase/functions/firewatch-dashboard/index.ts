@@ -21,7 +21,7 @@ Deno.serve(async(req:Request)=>{
  if(!Number.isFinite(exp)||exp<now||exp>now+12*3600||!sig)return html("<h1>GeoWatch</h1><p>Ссылка недействительна или истекла.</p>",401);
  const {data:secret,error:se}=await sb.rpc("firewatch_optional_vault_secret",{p_name:"firewatch_cron_secret"});if(se||!secret)return json({ok:false,error:"auth secret unavailable"},503);
  if(!safeEq(sig,await hmac(String(secret),"dashboard:"+String(exp))))return html("<h1>GeoWatch</h1><p>Ссылка недействительна.</p>",401);
- const action=u.searchParams.get("action");if(!action)return json({ok:true,service:"GeoWatch Dashboard API",version:"stage42.5-dashboard-v1"});
+ const action=u.searchParams.get("action");if(!action)return json({ok:true,service:"GeoWatch Dashboard API",version:"stage43.0-dashboard-v1"});
  try{
   const body:any=req.method==="POST"?await req.json().catch(()=>({})):{};
   if(action==="bootstrap"){
@@ -44,6 +44,12 @@ Deno.serve(async(req:Request)=>{
     official_registry:r?.official_registry??{hit_count:0,hits:[]},source_status:d?.source_status??{},errors:Array.isArray(d?.errors)?d.errors:[],
     runtime:r?.runtime??{},policy:r?.policy??null
    });
+  }
+  if(action==="regional"){
+   const oblast=String(body.oblast??"").trim(),category=String(body.category??"").trim();
+   if(!oblast||!category)return json({ok:false,error:"missing oblast/category"},400);
+   const d=await callInternal(base,key,"firewatch-regional-search",{oblast,category,refresh:Boolean(body.refresh)},100000);
+   return json(d);
   }
   return json({ok:false,error:"unknown action"},404)
  }catch(e){return json({ok:false,error:e instanceof Error?e.message:String(e)},500)}
