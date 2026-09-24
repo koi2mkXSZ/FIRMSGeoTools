@@ -29,7 +29,7 @@ create or replace function public.firewatch_oblast_geometry(p_oblast_id bigint)
 returns jsonb
 language sql
 stable security definer
-set search_path to 'public','pg_temp'
+set search_path to 'public','extensions','pg_temp'
 as $function$
 select jsonb_build_object(
   'id',o.id,
