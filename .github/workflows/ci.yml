@@ -43,5 +43,11 @@ jobs:
           deno check --config supabase/functions/firewatch-setup/deno.json supabase/functions/firewatch-setup/index.ts
           deno check --config supabase/functions/firewatch-doctor/deno.json supabase/functions/firewatch-doctor/index.ts
           deno check --config supabase/functions/firewatch-admin/deno.json supabase/functions/firewatch-admin/index.ts
+          deno check --config supabase/functions/firewatch-client/deno.json supabase/functions/firewatch-client/index.ts
           deno check --config supabase/functions/firewatch-geo-integrity/deno.json supabase/functions/firewatch-geo-integrity/index.ts
           deno check --config supabase/functions/firewatch-dashboard/deno.json supabase/functions/firewatch-dashboard/index.ts
+          deno check --config supabase/functions/firewatch-area-intel/deno.json supabase/functions/firewatch-area-intel/index.ts
+          deno check --config supabase/functions/firewatch-entity-profile/deno.json supabase/functions/firewatch-entity-profile/index.ts
+          deno check --config supabase/functions/firewatch-registry-fusion/deno.json supabase/functions/firewatch-registry-fusion/index.ts
+          deno check --config supabase/functions/firewatch-ghsl/deno.json supabase/functions/firewatch-ghsl/index.ts
+          deno check --config supabase/functions/firewatch-area-report/deno.json supabase/functions/firewatch-area-report/index.ts
