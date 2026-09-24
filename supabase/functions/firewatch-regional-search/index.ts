@@ -2,7 +2,7 @@ import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "@supabase/supabase-js";
 import { diceSimilarity as dice, normalizeRegionQuery as norm, resolveOblastRow, splitRegionObjectQuery, validateOblastAliases } from "./region_aliases.ts";
 import { REGIONAL_SPECS as SPECS, type RegionalSpec as Spec, buildFilterPredicate, extractRegionalFilters, mergeFilters, multiKey, normalizeFilters, parseRegionalQuery, resolveCategoryList, splitObjectExpression, validateRegionalCategories } from "./regional_categories.ts";
-import { applyObjectFilters, enrichSettlements, toGeoJson, type SettlementCandidate } from "./regional_enrichment.ts";
+import { applyObjectFilters, applySettlementTarget, enrichSettlements, resolveSettlementTarget, toGeoJson, type SettlementCandidate } from "./regional_enrichment.ts";
 
 const POSTPASS="https://postpass.geofabrik.de/api/interpreter";
 const FUSED="https://www.fused.io/server/v1/realtime-shared/UDF_Overture_Maps_Example/run/tiles";
@@ -11,7 +11,7 @@ const CACHE_MS=12*3600_000;
 const RAW_LIMIT=7000;
 const OUTPUT_LIMIT=5000;
 const SETTLEMENT_LIMIT=20000;
-const CACHE_VERSION="r43_1_2";
+const CACHE_VERSION="r43_1_3";
 
 function json(x:unknown,s=200){return new Response(JSON.stringify(x,null,2),{status:s,headers:{"content-type":"application/json; charset=utf-8","cache-control":"no-store"}})}
 function errText(e:any){return e instanceof Error?e.message:(e&&typeof e==="object"?JSON.stringify({code:e.code,message:e.message,details:e.details,hint:e.hint}):String(e))}
@@ -232,13 +232,16 @@ Deno.serve(async(req:Request)=>{
   if(needWikidata){try{wd=await wikidataByQids(osmRows)}catch(e){errors.push("Wikidata: "+errText(e))}}
   const resolved=resolve([...osmRows,...overture.features,...wd],spec);
   const enriched=enrichSettlements(resolved,settlements);
-  const filtered=applyObjectFilters(enriched.objects,filters);
+  const settlementTarget=filters.settlement?resolveSettlementTarget(settlements,filters.settlement):null;
+  const settlementScoped=settlementTarget?applySettlementTarget(enriched.objects,settlementTarget):enriched.objects;
+  const effectiveFilters=settlementTarget?{...filters,settlement:null}:filters;
+  const filtered=applyObjectFilters(settlementScoped,effectiveFilters);
   const objects=filtered.slice(0,OUTPUT_LIMIT);
   const truncated=osmTruncated||filtered.length>OUTPUT_LIMIT;
   const byCategory:any={};for(const x of objects)for(const k of Array.isArray(x.category_keys)?x.category_keys:[])byCategory[k]=(byCategory[k]??0)+1;
   const sources={osm_postpass:osmStatus,osm_query_count:querySpecs.length,osm_queries_ok:osmOk,settlement_enrichment:settlementStatus,settlement_candidates:settlements.length,overture:overture.status,overture_reason:overture.reason??null,wikidata:needWikidata?(wd.length?"active":"not_applicable"):"skipped_count_only",wikidata_mode:"qid_enrichment",overture_release:OVERTURE_RELEASE,overture_tiles_total:overture.tiles_total,overture_tiles_ok:overture.tiles_ok};
   const status=osmStatus!=="active"||["error","partial","tile_limit"].includes(String(overture.status))||(filters.settlement&&settlementStatus!=="active")||truncated?"degraded":"active",now=new Date().toISOString();
-  const summary={resolved_objects:objects.length,base_resolved_objects:resolved.length,filtered_out:Math.max(0,resolved.length-filtered.length),multi_source:objects.filter((x:any)=>x.source_count>1).length,osm_objects:osmRows.length,overture_objects:overture.features.length,wikidata_objects:wd.length,truncated,cache_ttl_hours:12,cache_version:CACHE_VERSION,resolution:resolutionInfo,filters,category_count:specs.length,by_category:byCategory,addressing:enriched.summary};
+  const summary={resolved_objects:objects.length,base_resolved_objects:resolved.length,filtered_out:Math.max(0,resolved.length-filtered.length),multi_source:objects.filter((x:any)=>x.source_count>1).length,osm_objects:osmRows.length,overture_objects:overture.features.length,wikidata_objects:wd.length,truncated,cache_ttl_hours:12,cache_version:CACHE_VERSION,resolution:resolutionInfo,filters,category_count:specs.length,by_category:byCategory,addressing:enriched.summary,settlement_filter:filters.settlement?settlementTarget?{mode:"radius_fallback",query:filters.settlement,target:settlementTarget.name,place:settlementTarget.place??null,radius_m:settlementTarget.radius_m,name_score:settlementTarget.name_score}:{mode:"enriched_name",query:filters.settlement}:null};
   const row={query_key:queryKey,oblast_id:oblast.id,oblast_code:oblast.code,oblast_name:oblast.name_uk,category_key:spec.key,queried_at:now,status,source_status:sources,summary,objects,errors,updated_at:now};
 
   if(body.count_only!==true){
@@ -247,7 +250,7 @@ Deno.serve(async(req:Request)=>{
   const format=String(body.format??"").toLowerCase();
   if(format==="csv")return new Response("\uFEFF"+toCsv(objects),{headers:{"content-type":"text/csv; charset=utf-8","content-disposition":'attachment; filename="'+spec.key+"-"+String(oblast.code)+'.csv"'}});
   if(format==="geojson"){const g=toGeoJson(objects,{oblast_code:oblast.code,oblast_name:oblast.name_uk,category_label:spec.label,query_key:queryKey,cached:false,summary});return new Response(JSON.stringify(g),{headers:{"content-type":"application/geo+json; charset=utf-8","cache-control":"no-store","content-disposition":'attachment; filename="'+spec.key+"-"+String(oblast.code)+'.geojson"'}})}
-  const payload={ok:true,cached:false,...row,category_label:spec.label,resolution:resolutionInfo,oblast:{id:oblast.id,code:oblast.code,name_uk:oblast.name_uk,name_en:oblast.name_en,bbox:oblast.bbox,center:oblast.center},policy:"Objects are public-source inventory candidates. Missing settlements may be inferred from the nearest public OSM place within 25 km and are marked settlement_method=osm_nearest. Filters and free-text matching use a safe whitelist of public OSM fields. Completeness depends on public source coverage and tagging."};
+  const payload={ok:true,cached:false,...row,category_label:spec.label,resolution:resolutionInfo,oblast:{id:oblast.id,code:oblast.code,name_uk:oblast.name_uk,name_en:oblast.name_en,bbox:oblast.bbox,center:oblast.center},policy:"Objects are public-source inventory candidates. Missing settlements may be inferred from the nearest public OSM place within 25 km and are marked settlement_method=osm_nearest. An explicit settlement filter may use a documented approximate radius fallback around the matched OSM place when administrative settlement polygons are unavailable. Filters and free-text matching use a safe whitelist of public OSM fields. Completeness depends on public source coverage and tagging."};
   if(body.count_only===true)return json({...payload,count_only:true,objects:[]});
   return json(payload);
  }catch(e){console.error("regional search error",errText(e));return json({ok:false,error:errText(e)},500)}
