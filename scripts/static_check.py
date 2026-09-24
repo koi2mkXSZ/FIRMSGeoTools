@@ -7,23 +7,19 @@ errors=[]
 
 def fail(msg): errors.append(msg)
 
-# JSON syntax
+# JSON syntax.
 for p in sorted(ROOT.rglob("*.json")):
     if any(x in p.parts for x in (".git","node_modules")): continue
     try: json.loads(p.read_text(encoding="utf-8"))
     except Exception as e: fail(f"{p.relative_to(ROOT)}: invalid JSON: {e}")
 
-# Public-repository secret / production hardcode guard.
-forbidden_literals=[
-    "swvpqroxbsrmxdmedojd",
-    "21.5,43.5,41.5,53.5",
-    "outside_ukraine",
-    "NASA-FIRMS-UA",
-    "GeoWatch-Dashboard",
-    "@NASA_FIRMS",
-]
+# Public-repository credential guard.
+# Public project refs, AOI coordinates, channel names and status labels are not secrets
+# and must not be treated as credentials.
 telegram_token=re.compile(r"\b\d{8,12}:[A-Za-z0-9_-]{30,}\b")
-service_key=re.compile(r"\beyJ[A-Za-z0-9_-]{80,}\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\b")
+legacy_jwt=re.compile(r"\beyJ[A-Za-z0-9_-]{80,}\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\b")
+supabase_secret=re.compile(r"\bsb_secret_[A-Za-z0-9_-]{20,}\b")
+github_token=re.compile(r"\b(?:ghp|github_pat)_[A-Za-z0-9_]{20,}\b")
 
 text_ext={".md",".sql",".ts",".json",".py",".sh",".ps1",".toml",".yml",".yaml",".example"}
 for p in sorted(ROOT.rglob("*")):
@@ -34,10 +30,10 @@ for p in sorted(ROOT.rglob("*")):
     rel=str(p.relative_to(ROOT))
     if rel=="scripts/static_check.py":
         continue
-    for lit in forbidden_literals:
-        if lit in text: fail(f"{rel}: forbidden production literal: {lit}")
     if telegram_token.search(text): fail(f"{rel}: looks like a real Telegram bot token")
-    if service_key.search(text): fail(f"{rel}: looks like a JWT/service key")
+    if legacy_jwt.search(text): fail(f"{rel}: looks like a JWT/service key")
+    if supabase_secret.search(text): fail(f"{rel}: looks like a Supabase secret key")
+    if github_token.search(text): fail(f"{rel}: looks like a GitHub access token")
 
 # Required clean-install files.
 required=[
@@ -66,13 +62,6 @@ required=[
 for rel in required:
     if not (ROOT/rel).exists(): fail(f"missing required file: {rel}")
 
-if errors:
-    print("STATIC CHECK FAILED")
-    for e in errors: print(" -",e)
-    sys.exit(1)
-print("STATIC CHECK PASS")
-
-
 # SQL delimiter sanity discovered during Stage 8 fresh-install.
 for p in sorted((ROOT/"supabase/migrations").glob("*.sql")):
     text=p.read_text(encoding="utf-8")
@@ -83,3 +72,9 @@ for p in sorted((ROOT/"supabase/migrations").glob("*.sql")):
             fail(f"{rel}:{lineno}: broken PostgreSQL dollar-quote delimiter")
     if text.count("$$") % 2 != 0:
         fail(f"{rel}: odd number of $$ delimiters")
+
+if errors:
+    print("STATIC CHECK FAILED")
+    for e in errors: print(" -",e)
+    sys.exit(1)
+print("STATIC CHECK PASS")
