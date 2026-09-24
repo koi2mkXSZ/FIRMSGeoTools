@@ -79,7 +79,7 @@ Deno.serve(async(req:Request)=>{
   const sb=createClient(base,key,{auth:{persistSession:false}}),bearer=req.headers.get("authorization")??"",cron=req.headers.get("x-cron-secret")??"";
   let authorized=bearer==="Bearer "+key;if(!authorized&&cron){const {data}=await sb.rpc("verify_firewatch_cron_secret",{p_secret:cron});authorized=data===true}if(!authorized)return json({ok:false,error:"unauthorized"},401);
   const body:any=await req.json().catch(()=>({}));
-  if(body.self_test==="oblast_aliases"){const report=validateOblastAliases(await oblastRows(sb));return json({ok:report.ok,self_test:"oblast_aliases",...report},report.ok?200:500)}
+  if(body.self_test==="oblast_aliases"){const report=validateOblastAliases(await oblastRows(sb));return json({self_test:"oblast_aliases",...report},report.ok?200:500)}
   const spec=specFor(body.category);
   if(!spec)return json({ok:false,error:"unsupported category",supported:SPECS.map(x=>({key:x.key,label:x.label}))},400);
   const oblast=await resolveOblast(sb,body.oblast);if(!oblast)return json({ok:false,error:"oblast not found"},404);
