@@ -1,4 +1,6 @@
 -- Stage 42.4 production hardening
+-- FIRMSGeoTools VERSION 1.0.0
+-- schema_version 37
 -- Keep SQL cache keys byte-compatible with JavaScript Number.toFixed(5).
 CREATE OR REPLACE FUNCTION public.firewatch_area_report_cached(
   p_lat double precision,
