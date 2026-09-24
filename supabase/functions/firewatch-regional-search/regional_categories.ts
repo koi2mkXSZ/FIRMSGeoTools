@@ -90,7 +90,7 @@ function removeAlias(q:string,a:string){
  return i>=0?(q.slice(0,i)+" "+q.slice(i+needle.length)).replace(/\s+/g," ").trim():q;
 }
 function cleanQualifier(v:string){return v.split(" ").filter(x=>x&&!STOPWORDS.has(x)).join(" ").trim()}
-function stableHash(v:string){let h=2166136261;for(let i=0;i<v.length;i++){h^=v.charCodeAt(i);h=Math.imul(h,16777619)}return(h>>>0).toString(16).padStart(8,"0")}
+export function stableHash(v:string){let h=2166136261;for(let i=0;i<v.length;i++){h^=v.charCodeAt(i);h=Math.imul(h,16777619)}return(h>>>0).toString(16).padStart(8,"0")}
 function sqlLike(v:string){return "'%"+v.replace(/'/g,"''")+"%'"}
 function tokenPredicate(v:string){
  const t=norm(v).slice(0,80);if(!t)return"false";
@@ -152,4 +152,91 @@ export function validateRegionalCategories(){
  for(const h of GENERIC_OSM_HINTS)for(const a of h.aliases){const q=norm(a);let set=hintOwner.get(q);if(!set){set=new Set();hintOwner.set(q,set)}set.add(h.key)}
  const duplicate_hint_aliases=[...hintOwner.entries()].filter(([,keys])=>keys.size>1).map(([alias,keys])=>({alias,keys:[...keys].sort()}));
  return{ok:duplicate_aliases.length===0&&duplicate_hint_aliases.length===0,category_count:REGIONAL_SPECS.length,alias_count:owner.size,generic_hint_count:GENERIC_OSM_HINTS.length,generic_hint_alias_count:hintOwner.size,duplicate_aliases,duplicate_hint_aliases};
+}
+
+
+export type RegionalFilters={
+ settlement?:string|null;
+ address?:string|null;
+ brand?:string|null;
+ operator?:string|null;
+};
+
+const FILTER_ALIASES:Record<string,keyof RegionalFilters>={
+ "city":"settlement","town":"settlement","settlement":"settlement","город":"settlement","місто":"settlement","населенный":"settlement","населений":"settlement",
+ "addr":"address","address":"address","адрес":"address","адреса":"address",
+ "brand":"brand","бренд":"brand",
+ "operator":"operator","оператор":"operator"
+};
+
+function safeFilterValue(v:unknown){return String(v??"").trim().replace(/^["']|["']$/g,"").slice(0,120)}
+function sqlText(v:string){return"'%"+norm(v).replace(/'/g,"''")+"%'"}
+
+export function normalizeFilters(v:any):RegionalFilters{
+ const out:RegionalFilters={};
+ if(!v||typeof v!=="object")return out;
+ for(const k of ["settlement","address","brand","operator"] as const){
+  const x=safeFilterValue(v[k]);if(x)out[k]=x;
+ }
+ return out;
+}
+
+export function extractRegionalFilters(v:unknown){
+ let text=String(v??"").trim();
+ const filters:RegionalFilters={};
+ const re=/(^|\s)(city|town|settlement|город|місто|населенный|населений|addr|address|адрес|адреса|brand|бренд|operator|оператор)\s*:\s*("(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|[^\s+]+)/giu;
+ text=text.replace(re,(m,prefix,key,value)=>{
+  const mapped=FILTER_ALIASES[norm(key)],clean=safeFilterValue(value);
+  if(mapped&&clean)filters[mapped]=clean;
+  return prefix?" ":"";
+ }).replace(/\s+/g," ").replace(/\s*\+\s*/g," + ").trim();
+ return{text,filters};
+}
+
+export function mergeFilters(a:RegionalFilters,b:RegionalFilters){
+ const out:RegionalFilters={...a};
+ for(const k of ["settlement","address","brand","operator"] as const)if(b[k])out[k]=b[k];
+ return out;
+}
+
+export function buildFilterPredicate(filters:RegionalFilters){
+ const f=normalizeFilters(filters),preds:string[]=[];
+ if(f.settlement){
+  const q=sqlText(f.settlement);
+  preds.push("(lower(coalesce(tags->>'addr:city','')) LIKE "+q+" OR lower(coalesce(tags->>'addr:town','')) LIKE "+q+" OR lower(coalesce(tags->>'addr:village','')) LIKE "+q+" OR lower(coalesce(tags->>'addr:place','')) LIKE "+q+" OR lower(coalesce(tags->>'is_in','')) LIKE "+q+")");
+ }
+ if(f.address){
+  const q=sqlText(f.address);
+  preds.push("(lower(concat_ws(' ',coalesce(tags->>'addr:full',''),coalesce(tags->>'addr:street',''),coalesce(tags->>'addr:housenumber',''),coalesce(tags->>'addr:place',''))) LIKE "+q+")");
+ }
+ if(f.brand){
+  const q=sqlText(f.brand);
+  preds.push("(lower(coalesce(tags->>'brand','')) LIKE "+q+" OR lower(coalesce(tags->>'brand:uk','')) LIKE "+q+" OR lower(coalesce(tags->>'brand:ru','')) LIKE "+q+" OR lower(coalesce(tags->>'name','')) LIKE "+q+")");
+ }
+ if(f.operator){
+  const q=sqlText(f.operator);
+  preds.push("(lower(coalesce(tags->>'operator','')) LIKE "+q+" OR lower(coalesce(tags->>'operator:uk','')) LIKE "+q+" OR lower(coalesce(tags->>'operator:ru','')) LIKE "+q+")");
+ }
+ return preds.length?preds.map(x=>"("+x+")").join(" AND "):"true";
+}
+
+export function splitObjectExpression(v:unknown){
+ return String(v??"").split(/\s*\+\s*/u).map(x=>x.trim()).filter(Boolean).slice(0,6);
+}
+
+export function resolveCategoryList(inputs:unknown[]){
+ const resolutions=inputs.map(resolveCategoryIntent);
+ const ambiguous=resolutions.find(x=>x.mode==="ambiguous"||!x.spec);
+ const unique:CategoryResolution[]=[];
+ const seen=new Set<string>();
+ for(const r of resolutions){
+  const k=r.spec?.key;if(!k||seen.has(k))continue;seen.add(k);unique.push(r);
+ }
+ return{resolutions:unique,ambiguous};
+}
+
+export function multiKey(resolutions:CategoryResolution[],filters:RegionalFilters){
+ const keys=resolutions.map(x=>x.spec?.key??"").filter(Boolean).sort();
+ const f=normalizeFilters(filters);
+ return stableHash(JSON.stringify({keys,f}));
 }
