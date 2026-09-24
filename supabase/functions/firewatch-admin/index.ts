@@ -675,7 +675,7 @@ async function areaIntelRequest(payload:any){
   if(!r.ok||!d?.ok)throw new Error(String(d?.error??("HTTP "+r.status)));return d;
 }
 function areaIntelText(d:any){
-  const s=d?.summary??{},counts=s.by_category??{},b=d?.buildings??{},near=d?.nearest??{},src=d?.source_status??{};
+  const s=d?.summary??{},counts=s.by_category??{},b=d?.buildings??{},near=d?.nearest??{},src=d?.source_status??{},er=d?.entity_summary??{},erc=d?.entity_resolution??{},entities:any[]=Array.isArray(erc.entities)?erc.entities:[];
   const labels:any={energy:"энергетика",industrial:"промышленность",government:"административные",emergency:"экстренные службы",healthcare:"медицина",education:"образование",transport:"транспорт",logistics:"логистика",water:"вода",telecom:"телеком",commercial:"коммерция",residential:"жилые",cultural:"культура",public_service:"общественные службы",storage:"хранение"};
   const order=["energy","industrial","government","emergency","healthcare","education","transport","logistics","water","telecom","commercial","residential","cultural","public_service","storage"];
   const lines=[
@@ -687,6 +687,12 @@ function areaIntelText(d:any){
   ];
   for(const k of order)if(Number(counts[k]??0)>0)lines.push("• "+(labels[k]??k)+": "+Number(counts[k]));
   lines.push("• building footprints: "+Number(b.building_count??0)+" • именованных "+Number(b.named_count??0)+" • non-residential tagged "+Number(b.nonresidential_tagged_count??0));
+  lines.push("","🔗 Entity resolution");
+  lines.push("• entities: "+Number(er.entities??0)+" • multi-source "+Number(er.multi_source??0)+" • Wikidata "+Number(er.wikidata_entities??0));
+  lines.push("• exact QID: "+Number(er.exact_qid??0)+" • probable "+Number(er.probable??0)+" • review "+Number(er.pending_proposals??0));
+  if(src.wikidata)lines.push("• Wikidata: "+String(src.wikidata)+" • "+String(src.wikidata_transport??"—"));
+  const multi=entities.filter((x:any)=>Number(x.source_count??0)>1).slice(0,6);
+  for(const x of multi)lines.push("  ↳ "+String(x.canonical_name??"—")+" • "+Number(x.source_count??0)+" sources"+(x.wikidata_qid?" • "+String(x.wikidata_qid):"")+" • "+String(x.resolution_status??""));
   lines.push("","📍 Ближайшие объекты");
   for(const k of order){
     const x=near[k];if(!x)continue;

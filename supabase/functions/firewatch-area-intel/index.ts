@@ -3,12 +3,15 @@ import { createClient } from "@supabase/supabase-js";
 
 const POSTPASS="https://postpass.geofabrik.de/api/interpreter";
 const FUSED="https://www.fused.io/server/v1/realtime-shared/UDF_Overture_Maps_Example/run/tiles";
+const WIKIDATA_SPARQL="https://query.wikidata.org/sparql";
+const WIKIMEDIA_API="https://uk.wikipedia.org/w/api.php";
 const OVERTURE_MIRROR_RELEASE="2026-04-15-0";
 const OVERTURE_OFFICIAL_LATEST="2026-09-23.0";
 const TIMEOUT_MS=25000;
 const CACHE_MS=12*3600_000;
 
 function json(x:unknown,s=200){return new Response(JSON.stringify(x,null,2),{status:s,headers:{"content-type":"application/json; charset=utf-8"}})}
+function errText(e:any){return e instanceof Error?e.message:(e&&typeof e==="object"?JSON.stringify({code:e.code,message:e.message,details:e.details,hint:e.hint}):String(e))}
 function clampRadius(v:any){const n=Math.round(Number(v??2000));return Math.max(250,Math.min(10000,Number.isFinite(n)?n:2000))}
 function qkey(lat:number,lon:number,r:number){return lat.toFixed(5)+":"+lon.toFixed(5)+":"+r}
 function hav(lat1:number,lon1:number,lat2:number,lon2:number){const p=Math.PI/180,R=6371000,dlat=(lat2-lat1)*p,dlon=(lon2-lon1)*p;const a=Math.sin(dlat/2)**2+Math.cos(lat1*p)*Math.cos(lat2*p)*Math.sin(dlon/2)**2;return 2*R*Math.asin(Math.min(1,Math.sqrt(a)))}
@@ -100,6 +103,188 @@ async function fetchJson(url:string){
   const r=await fetch(url,{headers:{"accept":"application/geo+json,application/json","user-agent":"GeoWatch-AreaIntel/1.0"},signal:AbortSignal.timeout(10000)});
   const t=await r.text();if(!r.ok)throw new Error("HTTP "+r.status+" "+t.slice(0,180));return JSON.parse(t);
 }
+function normName(v:any){
+  return String(v??"").normalize("NFKD").toLowerCase()
+    .replace(/[\u0300-\u036f]/g,"").replace(/['’\u02bc"]/g,"")
+    .replace(/[^\p{L}\p{N}]+/gu," ").replace(/\s+/g," ").trim();
+}
+function genericName(v:any){
+  const x=normName(v).replace(/_/g," ");
+  return new Set(["industrial","residential","energy","education","transport","government","emergency","healthcare","commercial","logistics","telecom","storage","water","cultural","public service","place","infrastructure","parking","bus stop","fence","lift gate","ferry terminal","wikidata entity"]).has(x);
+}
+function diceName(a:any,b:any){
+  const x=normName(a),y=normName(b);if(!x||!y||genericName(x)||genericName(y))return 0;if(x===y)return 1;
+  if((x.length>=6&&y.includes(x))||(y.length>=6&&x.includes(y)))return .92;
+  const bg=(s:string)=>{const z=s.replace(/\s+/g," ");const m=new Map<string,number>();for(let i=0;i<z.length-1;i++){const q=z.slice(i,i+2);m.set(q,(m.get(q)??0)+1)}return m};
+  const A=bg(x),B=bg(y);let inter=0,na=0,nb=0;for(const v of A.values())na+=v;for(const v of B.values())nb+=v;for(const [k,v] of A)inter+=Math.min(v,B.get(k)??0);
+  const dice=(na+nb)?2*inter/(na+nb):0;
+  const ta=new Set(x.split(" ").filter(z=>z.length>1)),tb=new Set(y.split(" ").filter(z=>z.length>1));
+  let ti=0;for(const z of ta)if(tb.has(z))ti++;const jac=(ta.size+tb.size-ti)?ti/(ta.size+tb.size-ti):0;
+  return Math.max(dice,jac);
+}
+function wdCategory(instanceLabels:string[],description:string){
+  const s=(instanceLabels.join(" ")+" "+description).toLowerCase();
+  const has=(...x:string[])=>x.some(k=>s.includes(k));
+  if(has("power station","power plant","substation","electric","електростан","підстан","электростан"))return["energy","wikidata"];
+  if(has("factory","industrial","plant","завод","промисл","промышлен"))return["industrial","wikidata"];
+  if(has("court","government","administration","city council","рада","адміністра","администра","суд"))return["government","wikidata"];
+  if(has("fire station","police","emergency","пожеж","поліц","полици","рятув"))return["emergency","wikidata"];
+  if(has("hospital","clinic","pharmacy","лікарн","лікар","больниц","клиник"))return["healthcare","wikidata"];
+  if(has("school","university","college","школ","універс","универс","коледж"))return["education","wikidata"];
+  if(has("railway","station","airport","port","bridge","terminal","вокзал","станці","станци","аеропорт","аэропорт","порт","міст","мост"))return["transport","wikidata"];
+  if(has("warehouse","logistics","склад","логіст","логист"))return["logistics","wikidata"];
+  if(has("water tower","waterworks","reservoir","водоканал","водосхов","водохрани"))return["water","wikidata"];
+  if(has("telecommunication","tower","mast","телеком","веж","башн"))return["telecom","wikidata"];
+  if(has("museum","theatre","library","church","cathedral","monument","музей","театр","бібліот","библиот","церк","собор"))return["cultural","wikidata"];
+  if(has("market","shopping","retail","торгов","ринок","рынок"))return["commercial","wikidata"];
+  return["wikidata_entity","entity"];
+}
+function parseWktPoint(v:any){
+  const m=String(v??"").match(/Point\(([-+0-9.eE]+)\s+([-+0-9.eE]+)\)/i);if(!m)return null;
+  const lon=Number(m[1]),lat=Number(m[2]);return Number.isFinite(lat)&&Number.isFinite(lon)?[lat,lon]:null;
+}
+async function wikiApi(params:Record<string,string>){
+  const u=new URL(WIKIMEDIA_API);for(const [k,v] of Object.entries(params))u.searchParams.set(k,v);
+  const res=await fetch(u.toString(),{headers:{"accept":"application/json","user-agent":"GeoWatch-AreaIntel/1.1 (FIRMSGeoTools)"},signal:AbortSignal.timeout(10000)});
+  const t=await res.text();if(!res.ok)throw new Error("Wikimedia HTTP "+res.status+": "+t.slice(0,180));
+  try{return JSON.parse(t)}catch{throw new Error("Wikimedia invalid JSON")}
+}
+function skipWikiContext(title:string,description:string){
+  const s=(title+" "+description).toLowerCase();
+  return ["стаття-список","список ","битва ","битва під","облога ","battle of","siege of","війна ","war of"].some(x=>s.includes(x));
+}
+async function wikidataContext(lat:number,lon:number,r:number){
+  const gs=await wikiApi({
+    action:"query",list:"geosearch",gsprimary:"all",gsnamespace:"0",
+    gscoord:lat.toFixed(7)+"|"+lon.toFixed(7),gsradius:String(Math.max(250,Math.min(10000,r))),
+    gslimit:"100",format:"json",formatversion:"2"
+  });
+  const points:any[]=Array.isArray(gs?.query?.geosearch)?gs.query.geosearch:[];
+  if(!points.length)return{status:"active",transport:"wikimedia_geosearch",count:0,features:[]};
+  const detailById=new Map<number,any>();
+  for(let i=0;i<points.length;i+=50){
+    const ids=points.slice(i,i+50).map(x=>String(x.pageid)).join("|");
+    const q=await wikiApi({action:"query",pageids:ids,prop:"pageprops|description",ppprop:"wikibase_item",format:"json",formatversion:"2"});
+    for(const p of Array.isArray(q?.query?.pages)?q.query.pages:[])detailById.set(Number(p.pageid),p);
+  }
+  const rows:any[]=[];
+  for(const p of points){
+    const d=detailById.get(Number(p.pageid))??{},qid=String(d?.pageprops?.wikibase_item??"");
+    if(!/^Q\d+$/.test(qid))continue;
+    const title=String(d?.title??p.title??qid),description=String(d?.description??"");
+    if(skipWikiContext(title,description))continue;
+    const plat=Number(p.lat),plon=Number(p.lon),dist=Number(p.dist);
+    if(!Number.isFinite(plat)||!Number.isFinite(plon)||!Number.isFinite(dist)||dist>r)continue;
+    const [cat,sub]=wdCategory([],description);
+    rows.push({source:"Wikidata",source_id:qid,wikidata_qid:qid,name:title,description,
+      distance_m:Math.round(dist),latitude:plat,longitude:plon,instance_labels:[],category:cat,subcategory:sub,
+      wikipedia_url:"https://uk.wikipedia.org/?curid="+String(p.pageid)});
+  }
+  rows.sort((a,b)=>a.distance_m-b.distance_m);
+  const unique=new Map<string,any>();for(const x of rows){const q=String(x.wikidata_qid);const old=unique.get(q);if(!old||Number(x.distance_m)<Number(old.distance_m))unique.set(q,x)}
+  const out=[...unique.values()].sort((a,b)=>a.distance_m-b.distance_m).slice(0,100);
+  return{status:"active",transport:"wikimedia_geosearch",count:out.length,features:out};
+}
+function sourceRank(s:string){return s==="Wikidata"?3:s==="OpenStreetMap"?2:s==="Overture"?1:0}
+function categoryCompatible(a:any,b:any){
+  const x=String(a??""),y=String(b??"");if(!x||!y||x==="wikidata_entity"||y==="wikidata_entity"||x==="place"||y==="place"||x==="infrastructure"||y==="infrastructure")return true;
+  return x===y;
+}
+function resolveEntities(osm:any[],overture:any[],wd:any[]){
+  const rows:any[]=[
+    ...osm.map(x=>({...x,wikidata_qid:/^Q\d+$/.test(String(x?.tags?.wikidata??""))?String(x.tags.wikidata):null})),
+    ...wd,
+    ...overture.map(x=>({...x,wikidata_qid:null}))
+  ];
+  rows.sort((a,b)=>(b.wikidata_qid?1:0)-(a.wikidata_qid?1:0)||sourceRank(b.source)-sourceRank(a.source)||Number(a.distance_m??0)-Number(b.distance_m??0));
+  const entities:any[]=[];const proposals:any[]=[];
+  const qidMap=new Map<string,any>();
+  const newEntity=(r:any)=>{
+    const e={key:r.wikidata_qid?("wd:"+r.wikidata_qid):(String(r.source)+":"+String(r.source_id)),canonical_name:r.name??r.wikidata_qid??r.source_id,
+      category:r.category??"other",subcategory:r.subcategory??null,latitude:r.latitude,longitude:r.longitude,wikidata_qid:r.wikidata_qid??null,
+      sources:[] as any[],resolution_status:"single_source",resolution_confidence:100,aliases:new Set<string>()};
+    entities.push(e);if(e.wikidata_qid)qidMap.set(e.wikidata_qid,e);return e;
+  };
+  const add=(e:any,r:any,method:string,confidence:number)=>{
+    e.sources.push({...r,match_method:method,match_confidence:confidence});
+    if(r.name)e.aliases.add(String(r.name));
+    if(!e.wikidata_qid&&r.wikidata_qid){e.wikidata_qid=r.wikidata_qid;qidMap.set(r.wikidata_qid,e);e.key="wd:"+r.wikidata_qid}
+    if(sourceRank(r.source)>sourceRank(e.sources?.[0]?.source??"")&&r.name)e.canonical_name=r.name;
+    if((e.category==="wikidata_entity"||e.category==="place"||e.category==="infrastructure")&&r.category&&!["wikidata_entity","place","infrastructure"].includes(r.category)){e.category=r.category;e.subcategory=r.subcategory??e.subcategory}
+    if(r.source==="OpenStreetMap"&&r.category){e.category=r.category;e.subcategory=r.subcategory??e.subcategory;e.latitude=r.latitude;e.longitude=r.longitude}
+    e.resolution_status=e.sources.length>1?(method==="exact_wikidata_qid"?"auto_exact":"auto_probable"):"single_source";
+    e.resolution_confidence=Math.min(e.resolution_confidence,confidence);
+  };
+  for(const r of rows){
+    if(r.wikidata_qid&&qidMap.has(r.wikidata_qid)){add(qidMap.get(r.wikidata_qid),r,"exact_wikidata_qid",100);continue}
+    let candidates:any[]=[];
+    if(!r.wikidata_qid||r.source!=="Wikidata"){
+      for(const e of entities){
+        if(e.sources.some((s:any)=>s.source===r.source))continue;
+        if(!categoryCompatible(e.category,r.category))continue;
+        const d=hav(Number(e.latitude),Number(e.longitude),Number(r.latitude),Number(r.longitude));
+        if(!Number.isFinite(d)||d>180)continue;
+        const sim=diceName(e.canonical_name,r.name);
+        let conf=Math.round(sim*75+Math.max(0,1-d/180)*25);
+        if(sim>=.88&&d<=120)conf=Math.max(conf,88);
+        if(sim>=.78&&d<=40)conf=Math.max(conf,86);
+        if(conf>=80)candidates.push({e,d,sim,conf});
+      }
+      candidates.sort((a,b)=>b.conf-a.conf||a.d-b.d);
+    }
+    if(candidates.length&&candidates[0].conf>=86&&(!candidates[1]||candidates[0].conf-candidates[1].conf>=6)){
+      add(candidates[0].e,r,"name_distance",candidates[0].conf);continue;
+    }
+    if(candidates.length&&candidates[0].conf>=80){
+      const own=newEntity(r);add(own,r,"single_source",100);
+      for(const x of candidates.slice(0,2))proposals.push({
+        source_a:String(r.source),source_id_a:String(r.source_id),source_b:String(x.e.sources[0]?.source??"entity"),
+        source_id_b:String(x.e.sources[0]?.source_id??x.e.key),confidence:x.conf,
+        reason:{name_similarity:Number(x.sim.toFixed(3)),distance_m:Math.round(x.d),candidate_name:x.e.canonical_name}
+      });
+      continue;
+    }
+    const e=newEntity(r);add(e,r,"single_source",100);
+  }
+  for(const e of entities){
+    const wdsrc=e.sources.find((x:any)=>x.source==="Wikidata"),osmsrc=e.sources.find((x:any)=>x.source==="OpenStreetMap");
+    if(wdsrc?.name)e.canonical_name=wdsrc.name;else if(osmsrc?.name)e.canonical_name=osmsrc.name;
+    if(osmsrc){e.latitude=osmsrc.latitude;e.longitude=osmsrc.longitude}
+    e.source_count=new Set(e.sources.map((x:any)=>x.source)).size;
+    if(e.source_count===1)e.resolution_status="single_source";
+    e.aliases=[...e.aliases].filter((x:any)=>x&&x!==e.canonical_name).slice(0,12);
+  }
+  return{entities,proposals};
+}
+async function persistResolution(sb:any,queryKey:string,res:any){
+  await sb.from("area_entity_resolution_proposals").delete().eq("query_key",queryKey);
+  await sb.from("area_entities").delete().eq("query_key",queryKey);
+  const entityRows=res.entities.map((e:any)=>({
+    query_key:queryKey,resolution_key:String(e.key),canonical_name:String(e.canonical_name??"").slice(0,240)||null,
+    category:e.category??null,subcategory:e.subcategory??null,latitude:Number.isFinite(Number(e.latitude))?Number(e.latitude):null,
+    longitude:Number.isFinite(Number(e.longitude))?Number(e.longitude):null,wikidata_qid:e.wikidata_qid??null,
+    source_count:e.source_count,resolution_status:e.resolution_status,resolution_confidence:e.resolution_confidence,
+    aliases:e.aliases,provenance:{sources:e.sources.map((x:any)=>({source:x.source,source_id:x.source_id,match_method:x.match_method,match_confidence:x.match_confidence}))}
+  }));
+  const {data:inserted,error:ie}=await sb.from("area_entities").insert(entityRows).select("id,resolution_key");if(ie)throw new Error("area_entities insert: "+errText(ie));
+  const idMap=new Map((inserted??[]).map((x:any)=>[String(x.resolution_key),String(x.id)]));
+  const sourceRows:any[]=[];
+  for(const e of res.entities){const eid=idMap.get(String(e.key));if(!eid)continue;for(const s of e.sources)sourceRows.push({
+    entity_id:eid,query_key:queryKey,source:String(s.source),source_id:String(s.source_id),source_name:s.name??null,
+    category:s.category??null,subcategory:s.subcategory??null,latitude:s.latitude??null,longitude:s.longitude??null,
+    wikidata_qid:s.wikidata_qid??null,match_method:s.match_method,match_confidence:s.match_confidence,
+    provenance:s.source==="OpenStreetMap"?{tags:s.tags??{}}:s.source==="Wikidata"?{description:s.description??null,instance_labels:s.instance_labels??[]}:{distance_m:s.distance_m??null}
+  })}
+  const sourceMap=new Map<string,any>();for(const x of sourceRows){const k=x.query_key+"|"+x.source+"|"+x.source_id;if(!sourceMap.has(k))sourceMap.set(k,x)}
+  const finalSources=[...sourceMap.values()];
+  if(finalSources.length){const {error}=await sb.from("area_entity_sources").insert(finalSources);if(error)throw new Error("area_entity_sources insert: "+errText(error))}
+  if(res.proposals.length){const {error}=await sb.from("area_entity_resolution_proposals").insert(res.proposals.map((p:any)=>({query_key:queryKey,...p})));if(error)throw new Error("resolution proposals insert: "+errText(error))}
+  const multi=res.entities.filter((e:any)=>e.source_count>1).length,exact=res.entities.filter((e:any)=>e.resolution_status==="auto_exact").length,prob=res.entities.filter((e:any)=>e.resolution_status==="auto_probable").length;
+  return{entities:res.entities.length,multi_source:multi,exact_qid:exact,probable:prob,pending_proposals:res.proposals.length,
+    source_rows:finalSources.length,wikidata_entities:finalSources.filter(x=>x.source==="Wikidata").length,
+    osm_entities:finalSources.filter(x=>x.source==="OpenStreetMap").length,overture_entities:finalSources.filter(x=>x.source==="Overture").length};
+}
+
 async function overtureContext(lat:number,lon:number,r:number){
   if(r>2500)return{status:"radius_limited",mirror_release:OVERTURE_MIRROR_RELEASE,official_latest:OVERTURE_OFFICIAL_LATEST,mirror_lag:true,features:[]};
   const z=16,c=tileXY(lat,lon,z),types=["infrastructure","place"],out:any[]=[];const errors:string[]=[];
@@ -143,13 +328,17 @@ Deno.serve(async(req:Request)=>{
   }
   if(!Number.isFinite(lat)||!Number.isFinite(lon)||Math.abs(lat)>90||Math.abs(lon)>180)return json({ok:false,error:"invalid coordinates"},400);
   const keyQ=qkey(lat,lon,radius);
+  const {data:prevCache}=await sb.from("area_intel_cache").select("*").eq("query_key",keyQ).maybeSingle();
   if(!body.refresh){
-    const {data:cached}=await sb.from("area_intel_cache").select("*").eq("query_key",keyQ).maybeSingle();
+    const cached=prevCache;
     const age=Date.now()-Date.parse(String(cached?.queried_at??""));
-    if(cached&&Number.isFinite(age)&&age<CACHE_MS)return json({ok:true,cached:true,event_id:eventId||null,...cached});
+    if(cached&&Number.isFinite(age)&&age<CACHE_MS){
+      const {data:er}=await sb.rpc("firewatch_area_entities",{p_lat:lat,p_lon:lon,p_radius_m:radius});
+      return json({ok:true,cached:true,event_id:eventId||null,...cached,entity_resolution:er??null});
+    }
   }
 
-  const errors:string[]=[];let osm:any=null,build:any={status:"not_checked"};let overture:any={status:"unavailable",features:[]};
+  const errors:string[]=[];let osm:any=null,build:any={status:"not_checked"};let overture:any={status:"unavailable",features:[]};let wikidata:any={status:"unavailable",features:[]};
   try{osm=await postpass(postpassSql(lat,lon,radius))}
   catch(e){errors.push("OSM/Postpass: "+(e instanceof Error?e.message:String(e)))}
   try{
@@ -158,6 +347,7 @@ Deno.serve(async(req:Request)=>{
     build={status:"active",source:"OpenStreetMap/Postpass",building_count:Number(bf.building_count??0),named_count:Number(bf.named_count??0),nonresidential_tagged_count:Number(bf.nonresidential_tagged_count??0)};
   }catch(e){build={status:"error"};errors.push("OSM buildings: "+(e instanceof Error?e.message:String(e)))}
   try{overture=await overtureContext(lat,lon,radius)}catch(e){errors.push("Overture: "+(e instanceof Error?e.message:String(e)))}
+  try{wikidata=await wikidataContext(lat,lon,radius)}catch(e){wikidata={status:"error",features:[]};errors.push("Wikidata: "+(e instanceof Error?e.message:String(e)))}
 
   const features:any[]=[];
   for(const row of Array.isArray(osm?.features)?osm.features:[]){
@@ -176,13 +366,28 @@ Deno.serve(async(req:Request)=>{
   for(const f of all){const n=per.get(f.category)??0;if(n>=8)continue;per.set(f.category,n+1);retained.push(f);if(retained.length>=80)break}
 
   const status=errors.some(x=>x.startsWith("OSM"))?"degraded":"active";
-  const result={query_key:keyQ,latitude:lat,longitude:lon,radius_m:radius,queried_at:new Date().toISOString(),status,
-    osm_base_at:osm?.osm3s?.timestamp_osm_base??null,
-    source_status:{osm_postpass:osm?"active":"error",overture:overture.status,overture_mirror_release:overture.mirror_release,overture_official_latest:overture.official_latest,overture_mirror_lag:overture.mirror_lag},
-    summary:{total_features:all.length,by_category:counts,overture_context_features:Array.isArray(overture.features)?overture.features.length:0,overture_features:Array.isArray(overture.features)?overture.features:[]},
-    features:retained,buildings:build,nearest,errors
-  };
-  const {error:ue}=await sb.from("area_intel_cache").upsert({query_key:keyQ,latitude:lat,longitude:lon,radius_m:radius,queried_at:result.queried_at,status,osm_base_at:result.osm_base_at,source_status:result.source_status,summary:result.summary,features:retained,buildings:build,nearest,errors,updated_at:new Date().toISOString()},{onConflict:"query_key"});
+  const sourceStatus={osm_postpass:osm?"active":"error",overture:overture.status,overture_mirror_release:overture.mirror_release,overture_official_latest:overture.official_latest,overture_mirror_lag:overture.mirror_lag,wikidata:wikidata.status,wikidata_transport:wikidata.transport??"wikimedia_geosearch",wikidata_count:Array.isArray(wikidata.features)?wikidata.features.length:0};
+  const baseSummary={total_features:all.length,by_category:counts,overture_context_features:Array.isArray(overture.features)?overture.features.length:0,overture_features:Array.isArray(overture.features)?overture.features:[],wikidata_context_features:Array.isArray(wikidata.features)?wikidata.features.length:0};
+  const queriedAt=new Date().toISOString();
+  const {error:ue}=await sb.from("area_intel_cache").upsert({query_key:keyQ,latitude:lat,longitude:lon,radius_m:radius,queried_at:queriedAt,status,osm_base_at:osm?.osm3s?.timestamp_osm_base??null,source_status:sourceStatus,summary:baseSummary,features:retained,buildings:build,nearest,errors,updated_at:queriedAt},{onConflict:"query_key"});
   if(ue)throw ue;
-  return json({ok:true,cached:false,event_id:eventId||null,...result,policy:"Descriptive area context only; no vulnerability, target-value, access-route or suitability scoring."});
+  let entitySummary:any={status:"not_run"};
+  const canReuseWd=wikidata.status==="error"&&Number(prevCache?.entity_summary?.wikidata_entities??0)>0;
+  if(canReuseWd){
+    entitySummary={...prevCache.entity_summary,status:"active",wikidata_refresh:"degraded_cached"};
+    sourceStatus.wikidata="degraded_cached";
+    await sb.from("area_intel_cache").update({entity_summary:entitySummary,source_status:sourceStatus,errors,updated_at:new Date().toISOString()}).eq("query_key",keyQ);
+  }else{
+    try{
+      const resolved=resolveEntities(retained,Array.isArray(overture.features)?overture.features:[],Array.isArray(wikidata.features)?wikidata.features:[]);
+      entitySummary=await persistResolution(sb,keyQ,resolved);
+      entitySummary={status:"active",...entitySummary};
+      await sb.from("area_intel_cache").update({entity_summary:entitySummary,source_status:sourceStatus,updated_at:new Date().toISOString()}).eq("query_key",keyQ);
+    }catch(e){entitySummary={status:"error",error:e instanceof Error?e.message:String(e)};errors.push("Entity resolution: "+entitySummary.error);await sb.from("area_intel_cache").update({entity_summary:entitySummary,errors,updated_at:new Date().toISOString()}).eq("query_key",keyQ)}
+  }
+  const {data:entityResolution}=await sb.rpc("firewatch_area_entities",{p_lat:lat,p_lon:lon,p_radius_m:radius});
+  const result={query_key:keyQ,latitude:lat,longitude:lon,radius_m:radius,queried_at:queriedAt,status,
+    osm_base_at:osm?.osm3s?.timestamp_osm_base??null,source_status:sourceStatus,
+    summary:baseSummary,features:retained,buildings:build,nearest,errors,entity_summary:entitySummary,entity_resolution:entityResolution};
+  return json({ok:true,cached:false,event_id:eventId||null,...result,policy:"Descriptive area context only. Entity resolution is non-destructive; ambiguous same_as candidates remain proposals."});
 });
