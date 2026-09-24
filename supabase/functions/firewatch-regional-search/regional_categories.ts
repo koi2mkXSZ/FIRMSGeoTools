@@ -171,8 +171,8 @@ const FILTER_ALIASES:Record<string,keyof RegionalFilters>={
  "brand":"brand","бренд":"brand",
  "operator":"operator","оператор":"operator",
  "source":"source","src":"source","источник":"source","джерело":"source",
- "confidence":"min_confidence","conf":"min_confidence","min_confidence":"min_confidence","уверенность":"min_confidence","впевненість":"min_confidence",
- "has_address":"has_address","addressed":"has_address","с_адресом":"has_address","з_адресою":"has_address"
+ "confidence":"min_confidence","conf":"min_confidence","min confidence":"min_confidence","уверенность":"min_confidence","впевненість":"min_confidence",
+ "has address":"has_address","addressed":"has_address","с адресом":"has_address","з адресою":"has_address"
 };
 
 function safeFilterValue(v:unknown){return String(v??"").trim().replace(/^["']|["']$/g,"").slice(0,120)}
