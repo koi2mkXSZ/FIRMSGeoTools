@@ -41,8 +41,7 @@ export function normalizeRegionQuery(v:unknown){
 }
 
 function unique(xs:string[]){return[...new Set(xs.map(normalizeRegionQuery).filter(Boolean))]}
-
-export function expandedAliases(d:OblastDefinition){
+function expandDefinition(d:OblastDefinition){
  const base=unique([d.uk,d.ru,d.en,...d.aliases]);
  if(d.kind==="city")return base;
  const out=[...base];
@@ -55,6 +54,19 @@ export function expandedAliases(d:OblastDefinition){
  return unique(out);
 }
 
+const DEFINITION_BY_CODE=new Map(OBLAST_DEFINITIONS.map(d=>[d.code,d]));
+const EXPANDED_BY_CODE=new Map(OBLAST_DEFINITIONS.map(d=>[d.code,expandDefinition(d)]));
+const OWNER_BY_ALIAS=new Map<string,Set<string>>();
+for(const d of OBLAST_DEFINITIONS){
+ for(const a of EXPANDED_BY_CODE.get(d.code)??[]){
+  let owners=OWNER_BY_ALIAS.get(a);if(!owners){owners=new Set();OWNER_BY_ALIAS.set(a,owners)}owners.add(d.code);
+ }
+}
+const EXACT_CODE_BY_ALIAS=new Map<string,string|null>();
+for(const [alias,owners] of OWNER_BY_ALIAS)EXACT_CODE_BY_ALIAS.set(alias,owners.size===1?[...owners][0]:null);
+
+export function expandedAliases(d:OblastDefinition){return[...(EXPANDED_BY_CODE.get(d.code)??expandDefinition(d))]}
+
 export function diceSimilarity(a:unknown,b:unknown){
  const x=normalizeRegionQuery(a),y=normalizeRegionQuery(b);
  if(!x||!y)return 0;if(x===y)return 1;if(x.includes(y)||y.includes(x))return .94;
@@ -65,25 +77,26 @@ export function diceSimilarity(a:unknown,b:unknown){
  return na+nb?2*hit/(na+nb):0;
 }
 
-function definitionMap(){return new Map(OBLAST_DEFINITIONS.map(d=>[d.code,d]))}
-
 export function resolveOblastRow<T extends OblastRow>(rows:T[],query:unknown):(T&{score:number})|null{
  const raw=String(query??"").trim(),q=normalizeRegionQuery(raw);if(!q)return null;
- const defs=definitionMap();
- const byCode=rows.filter(r=>String(r.code).toLowerCase()===raw.toLowerCase());
- if(byCode.length===1)return{...byCode[0],score:1};
- const exact:T[]=[];
- for(const row of rows){
-  const d=defs.get(String(row.code));
-  const aliases=unique([String(row.name_uk??""),String(row.name_en??""),...(d?expandedAliases(d):[])]);
-  if(aliases.includes(q))exact.push(row);
+ const byCode=rows.find(r=>String(r.code).toLowerCase()===raw.toLowerCase());
+ if(byCode)return{...byCode,score:1};
+
+ const exactCode=EXACT_CODE_BY_ALIAS.get(q);
+ if(exactCode){
+  const row=rows.find(r=>String(r.code)===exactCode);
+  if(row)return{...row,score:1};
  }
- if(exact.length===1)return{...exact[0],score:1};
- if(exact.length>1)return null;
+ if(EXACT_CODE_BY_ALIAS.has(q)&&exactCode===null)return null;
+
+ for(const row of rows){
+  if(q===normalizeRegionQuery(row.name_uk)||q===normalizeRegionQuery(row.name_en))return{...row,score:1};
+ }
+
  const scored=rows.map(row=>{
-  const d=defs.get(String(row.code));
-  const aliases=unique([String(row.name_uk??""),String(row.name_en??""),...(d?expandedAliases(d):[])]);
-  const score=aliases.reduce((m,a)=>Math.max(m,diceSimilarity(q,a)),0);
+  const code=String(row.code),aliases=EXPANDED_BY_CODE.get(code)??[];
+  let score=Math.max(diceSimilarity(q,row.name_uk),diceSimilarity(q,row.name_en));
+  for(const a of aliases){const s=diceSimilarity(q,a);if(s>score)score=s;if(score===1)break}
   return{row,score};
  }).sort((a,b)=>b.score-a.score);
  const best=scored[0],second=scored[1];
@@ -93,24 +106,26 @@ export function resolveOblastRow<T extends OblastRow>(rows:T[],query:unknown):(T
 }
 
 export function validateOblastAliases(rows:OblastRow[]){
- const defs=definitionMap(),dbCodes=[...new Set(rows.map(r=>String(r.code)))].sort(),aliasCodes=[...defs.keys()].sort();
- const missing_in_alias_map=dbCodes.filter(x=>!defs.has(x));
+ const dbCodes=[...new Set(rows.map(r=>String(r.code)))].sort(),aliasCodes=[...DEFINITION_BY_CODE.keys()].sort();
+ const missing_in_alias_map=dbCodes.filter(x=>!DEFINITION_BY_CODE.has(x));
  const unknown_alias_codes=aliasCodes.filter(x=>!dbCodes.includes(x));
- const owner=new Map<string,Set<string>>();
- for(const d of OBLAST_DEFINITIONS)for(const a of expandedAliases(d)){if(!owner.has(a))owner.set(a,new Set());owner.get(a)!.add(d.code)}
- const duplicate_aliases=[...owner.entries()].filter(([,codes])=>codes.size>1).map(([alias,codes])=>({alias,codes:[...codes].sort()}));
+ const duplicate_aliases=[...OWNER_BY_ALIAS.entries()]
+  .filter(([,codes])=>codes.size>1)
+  .map(([alias,codes])=>({alias,codes:[...codes].sort()}));
  const failed_resolution:{query:string;expected:string;actual:string|null}[]=[];
  for(const d of OBLAST_DEFINITIONS){
-  for(const alias of expandedAliases(d)){
-   const got=resolveOblastRow(rows,alias)?.code??null;
-   if(got!==d.code)failed_resolution.push({query:alias,expected:d.code,actual:got});
+  const rowExists=rows.some(r=>String(r.code)===d.code);
+  if(!rowExists)continue;
+  for(const alias of EXPANDED_BY_CODE.get(d.code)??[]){
+   const actual=EXACT_CODE_BY_ALIAS.get(alias)??null;
+   if(actual!==d.code)failed_resolution.push({query:alias,expected:d.code,actual});
   }
  }
  return{
   ok:missing_in_alias_map.length===0&&unknown_alias_codes.length===0&&duplicate_aliases.length===0&&failed_resolution.length===0,
   db_region_count:dbCodes.length,
   alias_region_count:aliasCodes.length,
-  alias_variant_count:[...owner.keys()].length,
+  alias_variant_count:OWNER_BY_ALIAS.size,
   missing_in_alias_map,unknown_alias_codes,duplicate_aliases,failed_resolution
  };
 }
