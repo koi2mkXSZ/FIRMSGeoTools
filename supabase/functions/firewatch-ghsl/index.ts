@@ -149,8 +149,13 @@ Deno.serve(async(req:Request)=>{
   const url=Deno.env.get("SUPABASE_URL"),key=Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
   if(!url||!key)return json({ok:false,error:"missing env"},500);
   const sb=createClient(url,key,{auth:{persistSession:false}});
-  const {data:auth,error:ae}=await sb.rpc("verify_firewatch_cron_secret",{p_secret:req.headers.get("x-cron-secret")??""});
-  if(ae||auth!==true)return json({ok:false,error:"unauthorized"},401);
+  const bearer=req.headers.get("authorization")??"";
+  let authorized=bearer==="Bearer "+key;
+  if(!authorized){
+    const {data:auth,error:ae}=await sb.rpc("verify_firewatch_cron_secret",{p_secret:req.headers.get("x-cron-secret")??""});
+    authorized=!ae&&auth===true;
+  }
+  if(!authorized)return json({ok:false,error:"unauthorized"},401);
   let body:any={};try{body=await req.json()}catch{}
   const tileCache=new Map<string,Promise<LoadedTile>>();
 
