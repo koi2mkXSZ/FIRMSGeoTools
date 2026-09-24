@@ -700,16 +700,29 @@ async function regionalSearchRequest(payload:any){
 function parseRegionalArgs(v:string){const query=String(v??"").trim();return query?{query}:null}
 function regionalCsv(d:any){const cols=["No","Name","Brand","Operator","Settlement","Address","Latitude","Longitude","Sources","Source count","Resolution status","Confidence","Wikidata QID"],cell=(v:any)=>{const s=String(v??"");return /[",\n\r;]/.test(s)?'"'+s.replace(/"/g,'""')+'"':s};const rows=(Array.isArray(d?.objects)?d.objects:[]).map((x:any,i:number)=>[i+1,x.canonical_name,x.brand,x.operator,x.settlement,x.address,Number(x.latitude).toFixed(6),Number(x.longitude).toFixed(6),(Array.isArray(x.sources)?x.sources:[]).map((s:any)=>s.source+":"+s.source_id).join(" | "),x.source_count,x.resolution_status,x.resolution_confidence,x.wikidata_qid]);return "\uFEFF"+[cols,...rows].map(r=>r.map(cell).join(",")).join("\r\n")}
 function regionalSearchText(d:any){
-  const s=d?.summary??{},res=d?.resolution??s?.resolution??{},xs:any[]=Array.isArray(d?.objects)?d.objects:[];
-  const mode=res?.mode==="generic"?"generic OSM":res?.mode==="semantic_hint"?"OSM semantic":res?.mode==="fuzzy"?"fuzzy → "+String(d?.category_label??d?.category_key??""):res?.mode==="qualified"?"category + filter":"category";
-  const lines=["🏭 REGIONAL OBJECT SEARCH",String(d?.oblast?.name_uk??d?.oblast_name??"—")+" • "+String(d?.category_label??d?.category_key??"—"),"Найдено: "+Number(s.resolved_objects??xs.length)+" • multi-source "+Number(s.multi_source??0)+" • status "+String(d?.status??"—")+(d?.cached?" • cache":" • fresh"),"Режим: "+mode+(res?.input?" • запрос: "+String(res.input):""),"Источники: OSM "+Number(s.osm_objects??0)+" • Overture "+Number(s.overture_objects??0)+" • Wikidata "+Number(s.wikidata_objects??0),""];
+  const s=d?.summary??{},res=d?.resolution??s?.resolution??{},xs:any[]=Array.isArray(d?.objects)?d.objects:[],filters=res?.filters??s?.filters??{};
+  const mode=res?.mode==="multi"?"multi-category":res?.mode==="generic"?"generic OSM":res?.mode==="semantic_hint"?"OSM semantic":res?.mode==="fuzzy"?"fuzzy":res?.mode==="qualified"?"category + filter":"category";
+  const filterText=Object.entries(filters).filter(([,v])=>v).map(([k,v])=>k+"="+String(v)).join(" • ");
+  const lines=["🏭 REGIONAL OBJECT SEARCH",String(d?.oblast?.name_uk??d?.oblast_name??"—")+" • "+String(d?.category_label??d?.category_key??"—"),"Найдено: "+Number(s.resolved_objects??xs.length)+" • multi-source "+Number(s.multi_source??0)+" • status "+String(d?.status??"—")+(d?.cached?" • cache":" • fresh"),"Режим: "+mode+(res?.input?" • запрос: "+String(res.input):"")+(filterText?"\nФильтры: "+filterText:""),"Источники: OSM "+Number(s.osm_objects??0)+" • Overture "+Number(s.overture_objects??0)+" • Wikidata "+Number(s.wikidata_objects??0),""];
   xs.slice(0,20).forEach((x:any,i:number)=>lines.push((i+1)+". "+String(x.canonical_name??"—")+(x.brand&&x.brand!==x.canonical_name?" • "+String(x.brand):"")+(x.settlement?" • "+String(x.settlement):"")+(x.address?" • "+String(x.address):"")+"\n   "+Number(x.latitude).toFixed(5)+", "+Number(x.longitude).toFixed(5)+" • "+Number(x.source_count??0)+" src • "+String(x.resolution_status??"—")));
   if(xs.length>20)lines.push("","Показаны первые 20 из "+xs.length+". Полный список: /objects_csv <область> <объект>");
   if(!xs.length)lines.push("","Совпадений в подключённых публичных данных не найдено.");
   if(Boolean(s.truncated))lines.push("","⚠️ Достигнут лимит источника/выдачи.");
   if(Array.isArray(d?.errors)&&d.errors.length)lines.push("","⚠️ Partial: "+d.errors.slice(0,3).join(" | "));
-  if(res?.mode==="generic")lines.push("","ℹ️ Свободный поиск: совпадение по безопасному набору публичных OSM name/tag полей; формулировка влияет на полноту.");
   lines.push("","Полнота зависит от картографирования публичных источников.");
+  return lines.join("\n").slice(0,3900);
+}
+function regionalCountText(d:any){
+  const s=d?.summary??{},r=d?.resolution??s?.resolution??{},f=r?.filters??s?.filters??{};
+  const fs=Object.entries(f).filter(([,v])=>v).map(([k,v])=>k+"="+String(v)).join(" • ");
+  return ["🔢 REGIONAL OBJECT COUNT",String(d?.oblast?.name_uk??d?.oblast_name??"—")+" • "+String(d?.category_label??d?.category_key??"—"),"Найдено: "+Number(s.resolved_objects??0)+" • status "+String(d?.status??"—")+(d?.cached?" • cache":" • fresh"),"Режим: "+String(r?.mode??"—")+(fs?"\nФильтры: "+fs:""),"OSM candidates: "+Number(s.osm_objects??0)+(s.truncated?" • ⚠️ truncated":"")].join("\n").slice(0,3900);
+}
+function regionalExplainText(d:any){
+  const r=d?.resolution??{},cats=Array.isArray(r.categories)?r.categories:[],f=r.filters??{},sp=d?.source_plan??{};
+  const lines=["🧠 REGIONAL QUERY EXPLAIN",String(d?.oblast?.name_uk??"—")+" • "+String(d?.oblast?.code??"—"),"Режим: "+String(r.mode??"—"),"Интерпретация:"];
+  for(const x of cats)lines.push("• "+String(x.label??x.key??"—")+" • "+String(x.mode??"—")+" • confidence "+Math.round(Number(x.confidence??0)*100)+"%");
+  const fs=Object.entries(f).filter(([,v])=>v);if(fs.length){lines.push("","Фильтры:");for(const [k,v] of fs)lines.push("• "+k+": "+String(v))}
+  lines.push("","План: "+String(sp.primary??"—")+" • polygon "+(sp.polygon_filter?"yes":"no")+" • cache "+Number(sp.cache_ttl_hours??0)+"h");
   return lines.join("\n").slice(0,3900);
 }
 function regionalErrorText(e:any){
@@ -1119,6 +1132,20 @@ async function processAdminUpdate(sb:any,token:string,adminId:string,u:any){
     const d=await entityProfileRequest(q);
     await tg(token,"sendMessage",{chat_id:adminId,text:entityProfileText(d),reply_markup:panelKeyboard,disable_web_page_preview:true});return true
   }
+  if(low.startsWith("/objects_explain")){
+    const q=raw.split(/\s+/).slice(1).join(" ").trim();
+    if(!q){await tg(token,"sendMessage",{chat_id:adminId,text:"Использование: /objects_explain <область> <объект/категория> [фильтры]",reply_markup:panelKeyboard});return true}
+    try{const d=await regionalSearchRequest({query:q,explain:true});await tg(token,"sendMessage",{chat_id:adminId,text:regionalExplainText(d),reply_markup:panelKeyboard})}
+    catch(e){await tg(token,"sendMessage",{chat_id:adminId,text:regionalErrorText(e),reply_markup:panelKeyboard})}
+    return true
+  }
+  if(low.startsWith("/objects_count")){
+    const q=raw.split(/\s+/).slice(1).join(" ").trim();
+    if(!q){await tg(token,"sendMessage",{chat_id:adminId,text:"Использование: /objects_count <область> <объект/категория> [фильтры]",reply_markup:panelKeyboard});return true}
+    try{const d=await regionalSearchRequest({query:q,count_only:true});await tg(token,"sendMessage",{chat_id:adminId,text:regionalCountText(d),reply_markup:panelKeyboard})}
+    catch(e){await tg(token,"sendMessage",{chat_id:adminId,text:regionalErrorText(e),reply_markup:panelKeyboard})}
+    return true
+  }
   if(low.startsWith("/objects_csv")){
     const q=raw.split(/\s+/).slice(1).join(" ").trim(),p=parseRegionalArgs(q);
     if(!p){await tg(token,"sendMessage",{chat_id:adminId,text:"Использование: /objects_csv <область> <объект/категория>\nПример: /objects_csv Полтавская область АЗС",reply_markup:panelKeyboard});return true}
@@ -1276,7 +1303,9 @@ Deno.serve(async(req:Request)=>{
         {command:"integrity",description:"Аудит пропусков и доставки"},
         {command:"coverage",description:"Аудит покрытия спутниковых источников"},
         {command:"search",description:"Поиск событий по фильтрам"},
-        {command:"objects",description:"Объекты по области и категории"},
+        {command:"objects",description:"Объекты по области / фильтры / multi"},
+        {command:"objects_count",description:"Количество объектов без списка"},
+        {command:"objects_explain",description:"Показать интерпретацию запроса"},
         {command:"objects_csv",description:"CSV объектов области"},
         {command:"analytics",description:"Сводная аналитика 24/168/720 ч"},
         {command:"priority",description:"События по приоритету"},
