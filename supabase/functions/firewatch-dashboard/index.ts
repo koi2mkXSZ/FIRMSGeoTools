@@ -1,90 +1,31 @@
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "@supabase/supabase-js";
-
+const PAGE="<!doctype html>\n<html lang=\"ru\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">\n<title>GeoWatch Dashboard</title><link rel=\"stylesheet\" href=\"https://unpkg.com/leaflet@1.9.4/dist/leaflet.css\">\n<style>\n:root{color-scheme:dark;--bg:#0b1118;--p:#111a24;--p2:#162232;--ln:#24354a;--tx:#e8eef7;--mu:#90a4bb;--ok:#4fd18b;--wa:#f6c453;--bad:#ff6b6b}*{box-sizing:border-box}\nbody{margin:0;background:var(--bg);color:var(--tx);font:14px/1.45 system-ui,-apple-system,Segoe UI,sans-serif}header{position:sticky;top:0;z-index:1000;display:flex;gap:12px;align-items:center;justify-content:space-between;padding:14px 18px;background:#0d151fee;border-bottom:1px solid var(--ln)}\nh1{font-size:18px;margin:0}.sub,.muted{color:var(--mu)}.wrap{padding:16px;max-width:1800px;margin:auto}.grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px}.card,.panel{background:var(--p);border:1px solid var(--ln);border-radius:12px;padding:14px}.metric{font-size:26px;font-weight:700;margin-top:6px}.ok{color:var(--ok)}.warn{color:var(--wa)}.bad{color:var(--bad)}.section{margin-top:14px}.split{display:grid;grid-template-columns:minmax(0,1.35fr) minmax(360px,.65fr);gap:12px}#map{height:520px;border-radius:12px;border:1px solid var(--ln)}.panel h2{font-size:15px;margin:0 0 12px}.controls{display:grid;grid-template-columns:repeat(6,minmax(120px,1fr));gap:8px}input,select,button{background:var(--p2);color:var(--tx);border:1px solid var(--ln);border-radius:8px;padding:9px}.controls>*{width:100%}button{cursor:pointer}.primary{background:#17365d!important}table{width:100%;border-collapse:collapse;font-size:12px}th,td{padding:8px;border-bottom:1px solid var(--ln);text-align:left;vertical-align:top}th{color:var(--mu);position:sticky;top:0;background:var(--p)}.tablewrap{max-height:520px;overflow:auto}.pill{display:inline-block;padding:2px 7px;border-radius:999px;background:#223248;margin:1px}.rowlink{cursor:pointer}.rowlink:hover{background:#152235}.kv{display:grid;grid-template-columns:1fr auto;gap:6px 10px}.bar{height:8px;background:#23344a;border-radius:99px;overflow:hidden}.bar>i{display:block;height:100%;background:#5ea5ff}#detail{white-space:pre-wrap;max-height:520px;overflow:auto}.top{display:flex;gap:8px;align-items:center}.notice{padding:10px;border:1px solid var(--ln);border-radius:8px;color:var(--mu)}\n@media(max-width:1200px){.grid{grid-template-columns:repeat(2,1fr)}.split{grid-template-columns:1fr}.controls{grid-template-columns:repeat(3,1fr)}}@media(max-width:700px){.grid{grid-template-columns:1fr}.controls{grid-template-columns:1fr 1fr}.wrap{padding:10px}#map{height:420px}}\n</style></head><body>\n<header><div><h1>GeoWatch · Web Dashboard</h1><div class=\"sub\" id=\"stamp\">Stage 32 · loading…</div></div><div class=\"top\"><select id=\"window\"><option value=\"24\">24 ч</option><option value=\"168\">7 дней</option><option value=\"720\">30 дней</option></select><button id=\"refresh\">Обновить</button></div></header>\n<div class=\"wrap\"><div class=\"grid\" id=\"metrics\"></div>\n<div class=\"section panel\"><h2>Поиск событий</h2><div class=\"controls\"><input id=\"f_id\" placeholder=\"ID события\"><input id=\"f_oblast\" placeholder=\"Область\"><select id=\"f_status\"><option value=\"\">Любой статус</option><option value=\"active\">active</option><option value=\"closed\">closed</option></select><input id=\"f_frp\" type=\"number\" min=\"0\" placeholder=\"FRP ≥ МВт\"><input id=\"f_source\" placeholder=\"Источник\"><select id=\"f_surface\"><option value=\"\">Surface: любой</option><option value=\"ready\">ready</option><option value=\"waiting_after\">waiting_after</option><option value=\"pending\">pending</option><option value=\"failed\">failed</option></select><button class=\"primary\" id=\"search\">Найти</button><button id=\"reset\">Сбросить</button></div></div>\n<div class=\"section split\"><div id=\"map\"></div><div class=\"panel\"><h2>Контроль качества</h2><div id=\"quality\"></div><h2 style=\"margin-top:18px\">События по областям</h2><div id=\"oblasts\"></div></div></div>\n<div class=\"section split\"><div class=\"panel\"><h2>События</h2><div class=\"tablewrap\"><table><thead><tr><th>ID</th><th>Время</th><th>Область</th><th>FRP</th><th>Источники</th><th>Статус</th></tr></thead><tbody id=\"events\"></tbody></table></div></div><div class=\"panel\"><h2>Карточка события</h2><div id=\"detail\" class=\"muted\">Выберите событие.</div></div></div>\n<div class=\"section notice\">Read-only dashboard. Доступ только по временной подписанной ссылке; service_role и секреты в браузер не передаются.</div></div>\n<script src=\"https://unpkg.com/leaflet@1.9.4/dist/leaflet.js\"></script>\n<script>\n(function(){\nvar qs=new URLSearchParams(location.search),auth=\"exp=\"+encodeURIComponent(qs.get(\"exp\")||\"\")+\"&sig=\"+encodeURIComponent(qs.get(\"sig\")||\"\");\nvar map=L.map(\"map\").setView([49,31],6),layer=L.layerGroup().addTo(map);L.tileLayer(\"https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png\",{maxZoom:18,attribution:\"&copy; OpenStreetMap contributors\"}).addTo(map);\nfunction esc(v){return String(v==null?\"\":v).replace(/[&<>\"']/g,function(c){var m={\"&\":\"&amp;\",\"<\":\"&lt;\",\">\":\"&gt;\",'\"':\"&quot;\",\"'\":\"&#39;\"};return m[c]})}\nfunction num(v,d){var n=Number(v);return Number.isFinite(n)?n.toFixed(d||0):\"—\"}\nasync function api(a,b){var o={method:b?\"POST\":\"GET\",headers:{\"content-type\":\"application/json\"}};if(b)o.body=JSON.stringify(b);var r=await fetch(location.pathname+\"?\"+auth+\"&action=\"+encodeURIComponent(a),o);if(!r.ok)throw new Error((await r.text()).slice(0,250));return r.json()}\nfunction met(l,v,s,c){return '<div class=\"card\"><div class=\"muted\">'+esc(l)+'</div><div class=\"metric '+(c||\"\")+'\">'+esc(v)+'</div><div class=\"sub\">'+esc(s||\"\")+'</div></div>'}\nfunction metrics(s,a){var i=s.monitor_notification_integrity||{},c=s.monitor_source_coverage||{},q=s.quota||{},e=a.events||{},g=Number(i.notification_gaps||0),b=Number(i.delivery_backlog||0),db=Number(q.database_pct||0);document.getElementById(\"metrics\").innerHTML=met(\"Событий за окно\",e.total||0,(e.active||0)+\" active · \"+(e.closed||0)+\" closed\")+met(\"Источники\",Number(c.sources_active||0)+\"/\"+Number(c.sources_total||0),\"degraded \"+Number(c.sources_degraded||0),Number(c.sources_degraded||0)?\"warn\":\"ok\")+met(\"Integrity\",g+\" gaps\",b+\" backlog\",(g||b)?\"bad\":\"ok\")+met(\"База\",db.toFixed(1)+\"%\",\"Edge \"+Number(q.edge_invocation_pct||0).toFixed(1)+\"%\",db>=85?\"bad\":db>=75?\"warn\":\"ok\")}\nfunction quality(s){var c=s.monitor_source_coverage||{},b=s.monitor_source_baseline||{},i=s.monitor_notification_integrity||{};document.getElementById(\"quality\").innerHTML='<div class=\"kv\"><span>Coverage</span><b>'+esc(c.status||\"—\")+'</b><span>Active</span><b>'+Number(c.sources_active||0)+' / '+Number(c.sources_total||0)+'</b><span>Degraded</span><b>'+Number(c.sources_degraded||0)+'</b><span>Baseline</span><b>'+esc(b.status||\"—\")+'</b><span>Learning / Watch / Anomaly</span><b>'+Number(b.sources_learning||0)+' / '+Number(b.sources_watch||0)+' / '+Number(b.sources_anomaly||0)+'</b><span>Delivery gaps</span><b>'+Number(i.notification_gaps||0)+'</b></div>'}\nfunction oblasts(a){var r=a.by_oblast||[],m=Math.max(1,...r.map(function(x){return Number(x.events||0)}));document.getElementById(\"oblasts\").innerHTML=r.map(function(x){var p=Math.round(Number(x.events||0)/m*100);return '<div style=\"margin:8px 0\"><div style=\"display:flex;justify-content:space-between\"><span>'+esc(x.oblast)+'</span><b>'+Number(x.events||0)+'</b></div><div class=\"bar\"><i style=\"width:'+p+'%\"></i></div></div>'}).join(\"\")||'<span class=\"muted\">Нет данных</span>'}\nfunction color(e){if(e.lifecycle_status===\"closed\")return \"#8aa0b8\";if(Number(e.max_frp||0)>=100)return \"#ff6b6b\";if(Number(e.max_frp||0)>=30)return \"#f6c453\";return \"#4fd18b\"}\nfunction events(rows){layer.clearLayers();rows=rows||[];document.getElementById(\"events\").innerHTML=rows.map(function(e){return '<tr class=\"rowlink\" data-id=\"'+esc(e.id)+'\"><td><b>'+esc(String(e.id).slice(0,8))+'</b></td><td>'+esc(String(e.last_seen||\"\").slice(0,16).replace(\"T\",\" \"))+'</td><td>'+esc(e.oblast||\"—\")+'</td><td>'+num(e.max_frp,1)+'</td><td>'+((e.sources||[]).map(function(x){return '<span class=\"pill\">'+esc(x)+'</span>'}).join(\"\"))+'</td><td>'+esc(e.lifecycle_status||e.status||\"—\")+'</td></tr>'}).join(\"\");rows.forEach(function(e){var la=Number(e.latitude),lo=Number(e.longitude);if(!Number.isFinite(la)||!Number.isFinite(lo))return;var m=L.circleMarker([la,lo],{radius:7,color:color(e),weight:2,fillOpacity:.65}).addTo(layer);m.bindTooltip(\"#\"+String(e.id).slice(0,8)+\" · \"+(e.oblast||\"\")+\" · FRP \"+num(e.max_frp,1));m.on(\"click\",function(){detail(e.id)})});document.querySelectorAll(\"tr[data-id]\").forEach(function(tr){tr.onclick=function(){detail(tr.getAttribute(\"data-id\"))}})}\nasync function detail(id){var el=document.getElementById(\"detail\");el.textContent=\"Загрузка…\";try{var d=await api(\"detail\",{id:id}),e=d.event||{};el.textContent=[\"ID события: \"+String(e.id||id).slice(0,8),\"Область: \"+(e.oblast||\"—\"),\"Статус: \"+(e.lifecycle_status||\"—\"),\"Координаты: \"+num(e.best_latitude,5)+\", \"+num(e.best_longitude,5),\"Точность: ~\"+(e.best_location_resolution_m||\"—\")+\" м\",\"Наблюдений: \"+(e.observation_count||0)+\" · платформ: \"+(e.multisource_count||0),\"Уверенность: \"+(e.event_confidence_label||e.event_confidence_level||\"—\"),\"FRP: \"+(e.frp_trend||\"—\")+\" · avg \"+num(e.frp_latest_avg,1)+\" МВт\",\"Surface: \"+(e.surface_status||\"pending\")+(e.dnbr!=null?\" · dNBR \"+num(e.dnbr,3):\"\"),\"Telegram: \"+(e.telegram_sent?\"отправлено\":\"нет\")].join(\"\\n\");var la=Number(e.best_latitude),lo=Number(e.best_longitude);if(Number.isFinite(la)&&Number.isFinite(lo))map.setView([la,lo],Math.max(map.getZoom(),10))}catch(x){el.textContent=\"Ошибка: \"+x.message}}\nasync function load(){try{var h=Number(document.getElementById(\"window\").value||24),d=await api(\"bootstrap\",{hours:h});metrics(d.snapshot||{},d.analytics||{});quality(d.snapshot||{});oblasts(d.analytics||{});events((d.search||{}).events||[]);document.getElementById(\"stamp\").textContent=\"Stage 32 · обновлено \"+new Date().toLocaleString(\"ru-RU\")}catch(x){document.getElementById(\"stamp\").textContent=\"Ошибка: \"+x.message}}\nasync function search(){var f={limit:50},v;v=document.getElementById(\"f_id\").value.trim();if(v)f.id=v;v=document.getElementById(\"f_oblast\").value.trim();if(v)f.oblast=v;v=document.getElementById(\"f_status\").value;if(v)f.status=v;v=document.getElementById(\"f_frp\").value;if(v)f.min_frp=Number(v);v=document.getElementById(\"f_source\").value.trim();if(v)f.source=v;v=document.getElementById(\"f_surface\").value;if(v)f.surface=v;try{events((await api(\"search\",{filters:f})).events||[])}catch(x){alert(\"Search: \"+x.message)}}\ndocument.getElementById(\"refresh\").onclick=load;document.getElementById(\"window\").onchange=load;document.getElementById(\"search\").onclick=search;document.getElementById(\"reset\").onclick=function(){[\"f_id\",\"f_oblast\",\"f_frp\",\"f_source\"].forEach(function(id){document.getElementById(id).value=\"\"});document.getElementById(\"f_status\").value=\"\";document.getElementById(\"f_surface\").value=\"\";load()};load();setInterval(load,60000);\n})();\n</script></body></html>";
 const enc=new TextEncoder();
-
 function b64url(bytes:Uint8Array){let s="";for(const b of bytes)s+=String.fromCharCode(b);return btoa(s).replace(/\+/g,"-").replace(/\//g,"_").replace(/=+$/g,"")}
 async function hmac(secret:string,value:string){const key=await crypto.subtle.importKey("raw",enc.encode(secret),{name:"HMAC",hash:"SHA-256"},false,["sign"]);return b64url(new Uint8Array(await crypto.subtle.sign("HMAC",key,enc.encode(value))))}
 function safeEq(a:string,b:string){if(a.length!==b.length)return false;let x=0;for(let i=0;i<a.length;i++)x|=a.charCodeAt(i)^b.charCodeAt(i);return x===0}
-function originOf(v:string|null|undefined){try{return v?new URL(v).origin:null}catch{return null}}
-function headers(origin:string|null,allowed:string|null){
-  const h:Record<string,string>={
-    "content-type":"application/json; charset=utf-8",
-    "cache-control":"no-store",
-    "referrer-policy":"no-referrer",
-    "x-content-type-options":"nosniff"
-  };
-  if(origin&&allowed&&origin===allowed){
-    h["access-control-allow-origin"]=origin;
-    h["access-control-allow-methods"]="GET,POST,OPTIONS";
-    h["access-control-allow-headers"]="content-type";
-    h["vary"]="Origin";
-  }
-  return h;
-}
-function j(data:unknown,status:number,origin:string|null,allowed:string|null){return new Response(JSON.stringify(data),{status,headers:headers(origin,allowed)})}
-
+const cors={"access-control-allow-origin":"https://koi2mkxsz.github.io","access-control-allow-methods":"GET,POST,OPTIONS","access-control-allow-headers":"content-type","vary":"Origin"};
+function json(data:unknown,status=200){return new Response(JSON.stringify(data),{status,headers:{...cors,"content-type":"application/json; charset=utf-8","cache-control":"no-store","referrer-policy":"no-referrer","x-content-type-options":"nosniff"}})}
+function html(body:string,status=200){return new Response(body,{status,headers:{"content-type":"text/html; charset=utf-8","cache-control":"no-store","referrer-policy":"no-referrer","x-content-type-options":"nosniff","x-frame-options":"DENY","content-security-policy":"default-src 'self'; script-src 'self' 'unsafe-inline' https://unpkg.com; style-src 'self' 'unsafe-inline' https://unpkg.com; img-src 'self' data: https://*.tile.openstreetmap.org; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'"}})}
 Deno.serve(async(req:Request)=>{
-  const base=Deno.env.get("SUPABASE_URL"),key=Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
-  if(!base||!key)return new Response(JSON.stringify({ok:false,error:"Missing Supabase runtime environment"}),{status:500,headers:{"content-type":"application/json"}});
-  const sb=createClient(base,key,{auth:{persistSession:false}});
-
-  const {data:pc,error:pce}=await sb.from("project_config").select("project_name,dashboard_enabled,dashboard_public_url").eq("id",true).single();
-  if(pce)return new Response(JSON.stringify({ok:false,error:"Dashboard configuration unavailable"}),{status:503,headers:{"content-type":"application/json"}});
-  const origin=req.headers.get("origin"),allowed=originOf(pc?.dashboard_public_url);
-
-  if(req.method==="OPTIONS"){
-    if(!origin||!allowed||origin!==allowed)return new Response(null,{status:403});
-    return new Response(null,{status:204,headers:headers(origin,allowed)});
+ if(req.method==="OPTIONS")return new Response(null,{status:204,headers:cors});
+ const u=new URL(req.url),base=Deno.env.get("SUPABASE_URL"),key=Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");if(!base||!key)return json({ok:false,error:"missing env"},500);
+ const sb=createClient(base,key,{auth:{persistSession:false}}),exp=Number(u.searchParams.get("exp")||0),sig=String(u.searchParams.get("sig")||""),now=Math.floor(Date.now()/1000);
+ if(!Number.isFinite(exp)||exp<now||exp>now+12*3600||!sig)return html("<h1>GeoWatch</h1><p>Ссылка недействительна или истекла.</p>",401);
+ const {data:secret,error:se}=await sb.rpc("firewatch_optional_vault_secret",{p_name:"firewatch_cron_secret"});if(se||!secret)return json({ok:false,error:"auth secret unavailable"},503);
+ if(!safeEq(sig,await hmac(String(secret),"dashboard:"+String(exp))))return html("<h1>GeoWatch</h1><p>Ссылка недействительна.</p>",401);
+ const action=u.searchParams.get("action");if(!action)return json({ok:true,service:"GeoWatch Dashboard API",version:"stage32-dashboard-v2"});
+ try{
+  const body:any=req.method==="POST"?await req.json().catch(()=>({})):{};
+  if(action==="bootstrap"){
+   const hours=Math.max(1,Math.min(Number(body.hours||24),8760));
+   const [s,a,e]=await Promise.all([sb.rpc("firewatch_admin_snapshot"),sb.rpc("firewatch_analytics_summary",{p_hours:hours}),sb.rpc("firewatch_search_events",{p_filters:{limit:50}})]);
+   if(s.error)throw s.error;if(a.error)throw a.error;if(e.error)throw e.error;return json({ok:true,snapshot:s.data||{},analytics:a.data||{},search:e.data||{}});
   }
-
-  if(pc?.dashboard_enabled===false)return j({ok:false,error:"Dashboard disabled"},403,origin,allowed);
-  if(origin&&(!allowed||origin!==allowed))return j({ok:false,error:"Origin not allowed"},403,origin,allowed);
-
-  const u=new URL(req.url),exp=Number(u.searchParams.get("exp")||0),sig=String(u.searchParams.get("sig")||""),now=Math.floor(Date.now()/1000);
-  if(!Number.isFinite(exp)||exp<now||exp>now+12*3600||!sig)return j({ok:false,error:"Invalid or expired dashboard signature"},401,origin,allowed);
-
-  const {data:secret,error:se}=await sb.rpc("firewatch_dashboard_secret");
-  if(se||!secret)return j({ok:false,error:"Dashboard auth secret unavailable"},503,origin,allowed);
-  if(!safeEq(sig,await hmac(String(secret),"dashboard:"+String(exp))))return j({ok:false,error:"Invalid dashboard signature"},401,origin,allowed);
-
-  const action=u.searchParams.get("action");
-  if(!action)return j({ok:true,service:"FIRMSGeoTools Dashboard API",version:"core-dashboard-v2-static"},200,origin,allowed);
-
-  try{
-    const body:any=req.method==="POST"?await req.json().catch(()=>({})):{};
-
-    if(action==="bootstrap"){
-      const hours=Math.max(1,Math.min(Number(body.hours||24),8760));
-      const [geo,a,cov,integ,e]=await Promise.all([
-        sb.rpc("firewatch_dashboard_geography"),
-        sb.rpc("firewatch_analytics_summary",{p_hours:hours}),
-        sb.rpc("firewatch_source_coverage_summary"),
-        sb.rpc("firewatch_integrity_diagnostics"),
-        sb.rpc("firewatch_search_events",{p_filters:{limit:50}})
-      ]);
-      for(const x of [geo,a,cov,integ,e])if(x.error)throw x.error;
-      return j({ok:true,project_name:pc?.project_name??"FIRMSGeoTools",geography:geo.data??{},analytics:a.data??{},coverage:cov.data??{},integrity:integ.data??{},search:e.data??{}},200,origin,allowed);
-    }
-
-    if(action==="search"){
-      const f=body&&typeof body.filters==="object"?body.filters:{};
-      f.limit=Math.min(Number(f.limit||50),50);
-      const {data,error}=await sb.rpc("firewatch_search_events",{p_filters:f});
-      if(error)throw error;
-      return j(data??{count:0,events:[]},200,origin,allowed);
-    }
-
-    if(action==="detail"){
-      const id=String(body.id||"").trim();
-      const {data,error}=await sb.rpc("firewatch_event_detail",{p_query:id||null});
-      if(error)throw error;
-      if(!data)return j({ok:false,error:"not found"},404,origin,allowed);
-      return j({ok:true,event:data},200,origin,allowed);
-    }
-
-    return j({ok:false,error:"unknown action"},404,origin,allowed);
-  }catch(e){
-    return j({ok:false,error:e instanceof Error?e.message:String(e)},500,origin,allowed);
-  }
-});
+  if(action==="search"){const f=body&&typeof body.filters==="object"?body.filters:{};f.limit=Math.min(Number(f.limit||50),50);const {data,error}=await sb.rpc("firewatch_search_events",{p_filters:f});if(error)throw error;return json(data||{count:0,events:[]})}
+  if(action==="detail"){const id=String(body.id||"").trim();const {data:e,error}=await sb.rpc("firewatch_event_detail",{p_query:id||null});if(error)throw error;if(!e)return json({ok:false,error:"not found"},404);const {data:s}=await sb.rpc("firewatch_satellite_evidence",{p_query:id||null});return json({ok:true,event:{...e,surface_status:s?.status??"pending",dnbr:s?.dnbr??null,dndvi:s?.dndvi??null}})}
+  if(action==="timeline"){const id=String(body.id||"").trim();const {data,error}=await sb.rpc("firewatch_event_timeline",{p_query:id||null});if(error)throw error;if(!data)return json({ok:false,error:"not found"},404);return json({ok:true,timeline:data})}
+  return json({ok:false,error:"unknown action"},404)
+ }catch(e){return json({ok:false,error:e instanceof Error?e.message:String(e)},500)}
+})

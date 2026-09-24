@@ -1,0 +1,1 @@
+import "jsr:@supabase/functions-js/edge-runtime.d.ts";Deno.serve(()=>new Response(JSON.stringify({ok:false,error:"diagnostic disabled"}),{status:403,headers:{"content-type":"application/json"}}));

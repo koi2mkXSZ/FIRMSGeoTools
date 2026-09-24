@@ -1,270 +1,877 @@
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "@supabase/supabase-js";
 
-function json(x:unknown,status=200){return new Response(JSON.stringify(x),{status,headers:{"content-type":"application/json; charset=utf-8","cache-control":"no-store"}})}
-function esc(v:unknown){return String(v??"").replace(/[&<>]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;"}[c]||c))}
-function age(iso:any){const t=Date.parse(String(iso??""));if(!Number.isFinite(t))return"never";const m=Math.max(0,Math.floor((Date.now()-t)/60000));return m<60?`${m} min`:`${Math.floor(m/60)} h ${m%60} min`}
-function shortId(v:any){return String(v??"").slice(0,8)}
-function num(v:any,d=1){const n=Number(v);return Number.isFinite(n)?n.toFixed(d):"—"}
-const enc=new TextEncoder();
-function b64url(bytes:Uint8Array){let s="";for(const b of bytes)s+=String.fromCharCode(b);return btoa(s).replace(/\+/g,"-").replace(/\//g,"_").replace(/=+$/g,"")}
+function json(data:unknown,status=200){return new Response(JSON.stringify(data,null,2),{status,headers:{"content-type":"application/json; charset=utf-8"}})}
+function ageText(iso:unknown){const t=Date.parse(String(iso??""));if(!Number.isFinite(t))return "нет данных";const m=Math.max(0,Math.floor((Date.now()-t)/60000));return m<60?`${m} мин назад`:`${Math.floor(m/60)} ч ${m%60} мин назад`}
 async function dashboardUrl(sb:any){
-  const [{data:secret,error},{data:pc,error:pce}]=await Promise.all([
-    sb.rpc("firewatch_dashboard_secret"),
-    sb.from("project_config").select("dashboard_public_url,dashboard_enabled").eq("id",true).single()
-  ]);
-  if(error||!secret)throw new Error("Dashboard signing secret unavailable");
-  if(pce)throw pce;
-  if(pc?.dashboard_enabled===false)throw new Error("Dashboard is disabled");
-  if(!pc?.dashboard_public_url)throw new Error("dashboard_public_url is not configured");
+  const {data:secret,error}=await sb.rpc("firewatch_optional_vault_secret",{p_name:"firewatch_cron_secret"});
+  if(error||!secret)throw new Error("dashboard signing secret unavailable");
   const base=Deno.env.get("SUPABASE_URL");if(!base)throw new Error("SUPABASE_URL unavailable");
   const exp=Math.floor(Date.now()/1000)+4*3600;
+  const enc=new TextEncoder();
   const key=await crypto.subtle.importKey("raw",enc.encode(String(secret)),{name:"HMAC",hash:"SHA-256"},false,["sign"]);
   const raw=new Uint8Array(await crypto.subtle.sign("HMAC",key,enc.encode("dashboard:"+String(exp))));
-  const sig=b64url(raw);
-  const front=new URL(String(pc.dashboard_public_url));
-  front.searchParams.set("api",base+"/functions/v1/firewatch-dashboard");
-  front.searchParams.set("exp",String(exp));
-  front.searchParams.set("sig",sig);
-  return front.toString();
+  let bin="";for(const b of raw)bin+=String.fromCharCode(b);
+  const sig=btoa(bin).replace(/\+/g,"-").replace(/\//g,"_").replace(/=+$/g,"");
+  return "https://koi2mkxsz.github.io/GeoWatch-Dashboard/?exp="+exp+"&sig="+encodeURIComponent(sig);
+}
+async function tg(token:string,method:string,body:unknown){const r=await fetch(`https://api.telegram.org/bot${token}/${method}`,{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify(body),signal:AbortSignal.timeout(15000)});const d=await r.json();if(!r.ok||!d?.ok)throw new Error(`Telegram ${method}: ${d?.description??r.status}`);return d.result}
+async function tgDocument(token:string,chatId:string,bytes:Uint8Array,fileName:string,caption:string,replyMarkup:any){
+  const form=new FormData();
+  form.append("chat_id",chatId);
+  form.append("document",new Blob([bytes],{type:"text/html"}),fileName);
+  form.append("caption",caption);
+  form.append("reply_markup",JSON.stringify(replyMarkup));
+  const r=await fetch(`https://api.telegram.org/bot${token}/sendDocument`,{method:"POST",body:form,signal:AbortSignal.timeout(30000)});
+  const d=await r.json();
+  if(!r.ok||!d?.ok)throw new Error(`Telegram sendDocument: ${d?.description??r.status}`);
+  return d.result;
 }
 
-async function tg(token:string,method:string,body:any){
-  const r=await fetch(`https://api.telegram.org/bot${token}/${method}`,{
-    method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify(body),signal:AbortSignal.timeout(20000)
-  });
-  const j=await r.json().catch(()=>null);
-  if(!r.ok||!j?.ok)throw new Error(`Telegram ${method}: ${j?.description??r.status}`);
-  return j.result;
-}
-async function send(token:string,chatId:string|number,text:string,reply_markup?:any){
-  return tg(token,"sendMessage",{chat_id:chatId,text,parse_mode:"HTML",disable_web_page_preview:true,...(reply_markup?{reply_markup}:{})});
-}
-async function sendChunks(token:string,chatId:string|number,parts:string[]){for(const p of parts)await send(token,chatId,p)}
-
-const panel={inline_keyboard:[
-  [{text:"🌐 Dashboard",callback_data:"a:dashboard"}],
-  [{text:"📊 Status",callback_data:"a:status"},{text:"🛰 Coverage",callback_data:"a:coverage"}],
-  [{text:"🔥 Events",callback_data:"a:events"},{text:"📈 Analytics 24h",callback_data:"a:analytics24"}],
-  [{text:"📍 Radius search",callback_data:"a:searchgeo"},{text:"🔎 Search help",callback_data:"a:searchhelp"}],
-  [{text:"🩺 Doctor",callback_data:"a:doctor"}]
+const panelKeyboard={inline_keyboard:[[{text:"🌐 Web Dashboard",callback_data:"admin:dashboard"}],[{text:"📊 Статус",callback_data:"admin:status"},{text:"🛰 Источники",callback_data:"admin:sources"}],[{text:"🔥 Последние события",callback_data:"admin:events"},{text:"📋 Отчёт события",callback_data:"admin:report"}],[{text:"📑 Досье события",callback_data:"admin:dossier"},{text:"🛰 Поверхность",callback_data:"admin:satellite"}],[{text:"🧠 Последнее событие",callback_data:"admin:event"},{text:"🧪 Integrity",callback_data:"admin:integrity"}],[{text:"📡 Coverage",callback_data:"admin:coverage"}],[{text:"🔎 OSINT",callback_data:"admin:osint"},{text:"🗺 Гео/инфра",callback_data:"admin:geo"}],[{text:"🌫 Наземные датчики",callback_data:"admin:ground"}],[{text:"🔎 Поиск",callback_data:"admin:search"},{text:"📈 Аналитика",callback_data:"admin:analytics"}],[{text:"👥 Клиенты",callback_data:"admin:clients"}],[{text:"🗄 Архив",callback_data:"admin:archive"},{text:"🔄 Обновить",callback_data:"admin:status"}]]};
+const searchKeyboard={inline_keyboard:[
+  [{text:"📍 По координате и радиусу",callback_data:"admin:search_geo"}],
+  [{text:"🧩 Все фильтры поиска",callback_data:"admin:search_help"}],
+  [{text:"⬅️ Назад в панель",callback_data:"admin:status"}]
 ]};
-
-function parseSearch(s:string){
-  const f:any={};
-  for(const part of s.trim().split(/\s+/).slice(1)){
-    const i=part.indexOf("=");if(i<1)continue;
-    const k=part.slice(0,i).toLowerCase(),v=part.slice(i+1);
-    if(["id","region","status","source","from","to","min_frp","min_obs","min_platforms","sent","limit"].includes(k))f[k]=v;
-    if(["radius","radius_km","r"].includes(k))f.radius_km=v;
-    if(["coord","coords","center"].includes(k)){
-      const [lat,lon]=v.split(",").map(Number);if(Number.isFinite(lat)&&Number.isFinite(lon)){f.lat=lat;f.lon=lon}
-    }
-    if(k==="lat")f.lat=v;if(["lon","lng"].includes(k))f.lon=v;
-  }
-  return f;
+function statusText(s:any){const q=Number(s.telegram_queue_count??0),db=Number(s.database_size_bytes??0);const issues:string[]=[];for(const [name,m] of [["NOAA/Telegram",s.monitor],["MODIS",s.monitor_modis],["Suomi NPP",s.monitor_snpp]] as any[]){const t=Date.parse(String(m?.last_success_run??""));const age=Number.isFinite(t)?Date.now()-t:Infinity;if(age>45*60000)issues.push(`${name}: нет успешного цикла >45 мин`);if(m?.last_error)issues.push(`${name}: ${String(m.last_error).slice(0,120)}`)}const oldest=Date.parse(String(s.oldest_telegram_queue_item??""));if(q>0&&Number.isFinite(oldest)&&Date.now()-oldest>30*60000)issues.push(`Telegram очередь задержана >30 мин: ${q}`);const dbPct=Number(s.quota?.database_pct??0);if(dbPct>=85)issues.push(`База критично заполнена: ${dbPct.toFixed(1)}%`);else if(dbPct>=75)issues.push(`База заполнена: ${dbPct.toFixed(1)}%`);if(Number(s.quota?.edge_invocation_pct??0)>=75)issues.push(`Edge invocations >75% прогноза квоты`);return [`🛠 NASA FIRMS — админ-панель`,``,`Система: ${issues.length?"⚠️ есть замечания":"✅ штатно"}`,`NOAA/Telegram: ${ageText(s.monitor?.last_success_run)}`,`MODIS: ${ageText(s.monitor_modis?.last_success_run)}`,`Suomi NPP: ${ageText(s.monitor_snpp?.last_success_run)}`,`OSINT Fusion: ${ageText(s.monitor_osint?.last_success_run)} • ${s.monitor_osint?.status??"нет данных"}`,`Ground OSINT: ${ageText(s.monitor_ground_osint?.last_check)} • ${s.monitor_ground_osint?.status??"нет данных"}`,`Geo OSINT: ${ageText(s.monitor_geo_osint?.last_check)} • ${s.monitor_geo_osint?.status??"нет данных"}`,`Dossier: ${ageText(s.monitor_dossier?.last_success_run)} • ${s.monitor_dossier?.status??"нет данных"}`,`Satellite Surface: ${ageText(s.monitor_satellite_evidence?.last_success_run)} • ${s.monitor_satellite_evidence?.status??"нет данных"}`,`Event Report: ${s.event_report_policy?.status??"нет данных"} • ${s.event_report_policy?.version??"—"}`,`Notification Integrity: ${s.monitor_notification_integrity?.status??"нет данных"} • gaps ${Number(s.monitor_notification_integrity?.notification_gaps??0)} • backlog ${Number(s.monitor_notification_integrity?.delivery_backlog??0)}`,`Source Coverage: ${s.monitor_source_coverage?.status??"нет данных"} • active ${Number(s.monitor_source_coverage?.sources_active??0)}/${Number(s.monitor_source_coverage?.sources_total??0)} • degraded ${Number(s.monitor_source_coverage?.sources_degraded??0)}`,`Coverage Baseline: ${s.monitor_source_baseline?.status??"нет данных"} • learning ${Number(s.monitor_source_baseline?.sources_learning??0)} • watch ${Number(s.monitor_source_baseline?.sources_watch??0)} • anomaly ${Number(s.monitor_source_baseline?.sources_anomaly??0)}`,`Админ-доставка: ${s.admin_bot_state?.delivery_mode==="webhook"&&s.admin_bot_state?.webhook_enabled?"⚡ webhook":"⚠️ "+String(s.admin_bot_state?.delivery_mode??"не настроено")} • pending ${Number(s.admin_bot_state?.webhook_pending_update_count??0)}`,`Telegram: новые ${Number(s.telegram_queue_new_count??0)} • обновления ${Number(s.telegram_queue_update_count??0)} • закрытия ${Number(s.telegram_queue_close_count??0)}`,`База: ${(db/1024/1024).toFixed(1)} МБ / 500 МБ (${Number(s.quota?.database_pct??0).toFixed(1)}%)`,`Edge прогноз: ${Number(s.quota?.estimated_cron_edge_invocations_30d??0).toLocaleString("ru-RU")} / 500 000`,`Media proxy 30д: ${(Number(s.quota?.tracked_media_bytes_30d??0)/1024/1024).toFixed(1)} МБ`,issues.length?`\nПроблемы:\n${issues.map(x=>`• ${x}`).join("\n")}`:""].filter(Boolean).join("\n")}
+function sourcesText(s:any){const m=s.monitor??{},mo=s.monitor_modis??{},sn=s.monitor_snpp??{};return [`🛰 Источники`,``,`NOAA-20/21 • VIIRS ~375 м`,`Последний цикл: ${ageText(m.last_success_run)}`,`Последний проход: ${m.inserted??0} новых / ${m.duplicates??0} дублей`,``,`Suomi NPP • VIIRS ~375 м`,`Последний цикл: ${ageText(sn.last_success_run)}`,`Последний проход: ${sn.inserted??0} новых / ${sn.duplicates??0} дублей`,``,`Terra/Aqua • MODIS ~1 км`,`Последний цикл: ${ageText(mo.last_success_run)}`,`Последний проход: ${mo.inserted??0} новых / ${mo.duplicates??0} дублей`].join("\n")}
+function archiveText(s:any){const h=s.history_backfill??{};const db=Number(s.database_size_bytes??0);return [`🗄 Архив и база`,``,`365-дневный backfill: ${h.done?"✅ завершён":"⏳ выполняется"}`,`Обработано дней: ${h.processed_days??0}`,`Курсор: ${h.cursor??"—"}`,`Принято строк: ${h.accepted_rows??0}`,`Агрегатных ячеек: ${h.upserted_cells??0}`,`API-вызовов: ${h.api_calls??0}`,`Последняя ошибка: ${h.last_error??"нет"}`,``,`Размер базы: ${(db/1024/1024).toFixed(1)} МБ / 500 МБ (${Number(s.quota?.database_pct??0).toFixed(1)}%)`,`Raw detections retention: 90 дней`,`Compact archive retention: rolling 365 дней`,`Cron/HTTP logs retention: 7 дней`].join("\n")}
+async function latestEvents(sb:any){const {data,error}=await sb.from("fire_events").select("id,last_seen,observation_count,lifecycle_status,last_latitude,last_longitude,best_latitude,best_longitude,multisource_count,event_confidence_level,best_location_resolution_m,telegram_message_id,oblasts(name_uk)").order("last_seen",{ascending:false}).limit(5);if(error)throw error;const lines=(data??[]).map((e:any,i:number)=>`${i+1}. #${String(e.id).slice(0,8)} • ${e.oblasts?.name_uk??"Регион?"} • ${new Date(e.last_seen).toISOString().slice(0,16).replace("T"," ")} UTC\n   ${Number(e.best_latitude??e.last_latitude).toFixed(4)}, ${Number(e.best_longitude??e.last_longitude).toFixed(4)} • ~${e.best_location_resolution_m??"?"} м\n   платформ ${e.multisource_count??0} • ${e.event_confidence_level??"unknown"} • наблюдений ${e.observation_count} • ${e.lifecycle_status}\n   /event ${String(e.id).slice(0,8)}`);return `🔥 Последние события\n\n${lines.join("\n\n")||"Нет данных"}`}
+function compass(deg:any){const n=Number(deg);if(!Number.isFinite(n))return"—";const names=["С","СВ","В","ЮВ","Ю","ЮЗ","З","СЗ"];return names[Math.round((((n%360)+360)%360)/45)%8]+" ("+Math.round(n)+"°)"}
+async function eventDetailText(sb:any,q?:string){const {data,error}=await sb.rpc("firewatch_event_detail",{p_query:q?.trim()||null});if(error)throw error;if(!data)return"Событие не найдено.";const e:any=data,p=e.plume_forecast?.hours??[],p1=p.find((x:any)=>Number(x.hour)===1),p3=p.find((x:any)=>Number(x.hour)===3),p6=p.find((x:any)=>Number(x.hour)===6);const frp=e.frp_change_pct==null?"—":(Number(e.frp_change_pct)>=0?"+":"")+Number(e.frp_change_pct).toFixed(0)+"%";const line=(x:any)=>x?("~"+Number(x.distance_km??0).toFixed(0)+" км • "+compass(x.transport_bearing_deg)):"—";return [`🧠 Событие #${String(e.id).slice(0,8)}`,`Область: ${e.oblast??"—"}`,`Статус: ${e.lifecycle_status??"—"}`,`Координаты: ${Number(e.best_latitude).toFixed(5)}, ${Number(e.best_longitude).toFixed(5)} • ~${e.best_location_resolution_m??"?"} м`,`Наблюдений: ${e.observation_count??0} • платформ: ${e.multisource_count??0}`,`Уверенность: ${e.event_confidence_label??e.event_confidence_level??"—"}`,"",`FRP: ${e.frp_trend??"—"} • изменение ${frp}`,`Кластер: ~${e.cluster_diameter_m==null?"—":Math.round(Number(e.cluster_diameter_m))+" м"}`,`Смещение центра: ${e.cluster_motion_m==null?"—":Math.round(Number(e.cluster_motion_m))+" м"} • ${compass(e.cluster_motion_bearing_deg)}`,"",`Расчётный перенос: ${compass(e.plume_direction_deg)}`,`1 ч: ${line(p1)}`,`3 ч: ${line(p3)}`,`6 ч: ${line(p6)}`,`Ориентир по 3-часовой траектории: ${e.plume_reference_place??"—"}${e.plume_reference_place_distance_km!=null?" (~"+Number(e.plume_reference_place_distance_km).toFixed(1)+" км от расчётной точки)":""}`,"",`Атмосферный сигнал: ${e.atmosphere_signal_level??"—"}`,e.s5p_aer_ai_340_380!=null?`Sentinel-5P AI: ${Number(e.s5p_aer_ai_340_380).toFixed(2)}`:null,e.cams_aerosol_optical_depth!=null?`CAMS AOD: ${Number(e.cams_aerosol_optical_depth).toFixed(2)}`:null,"",e.event_summary?`Сводка: ${e.event_summary}`:null,"⚠️ Сектор переноса — расчёт по ветру 10 м, а не подтверждённый прогноз концентрации дыма."].filter(Boolean).join("\n").slice(0,3900)}
+async function snapshot(sb:any){const {data,error}=await sb.rpc("firewatch_admin_snapshot");if(error)throw error;return data??{}}
+const DOSSIER_FLAG_LABELS:Record<string,string>={
+  multi_satellite_confirmed:"подтверждение ≥2 спутниковыми платформами",
+  repeat_hotspot_30d:"повторные аномалии за 30 дней",
+  repeat_hotspot_365d:"повторные аномалии за 365 дней",
+  persistent_gt_3h:"длительность ≥3 ч",
+  frp_ge_50mw:"FRP max ≥50 МВт",
+  cluster_ge_1km:"кластер ≥1 км",
+  wind_transport_context:"есть расчёт переноса ветром",
+  atmospheric_signal_above_background:"атмосферный сигнал выше фонового",
+  ground_sensor_context:"есть наземные измерения",
+  external_osint_match:"есть внешний OSINT match",
+  infrastructure_context:"рядом картографированная инфраструктура",
+  near_power_line_500m:"ЛЭП ≤500 м",
+  near_power_infrastructure_2km:"энергоинфраструктура ≤2 км",
+  near_pipeline_1km:"трубопровод ≤1 км",
+  near_industrial_2km:"промышленный объект ≤2 км",
+  forest_context:"лес ≤500 м",
+  agriculture_context:"сельхозземли ≤500 м",
+  settlement_near_2km:"населённый пункт ≤2 км",
+  sentinel2_before_available:"есть Sentinel-2 до события",
+  sentinel2_after_available:"есть Sentinel-2 после события",
+  surface_change_pair_ready:"готова пара Sentinel-2 до/после"
+};
+function dossierNum(v:any,d=1){const n=Number(v);return Number.isFinite(n)?n.toFixed(d):"—"}
+function satelliteSceneLine(label:string,x:any){
+  if(!x)return `${label}: —`;
+  const dt=String(x.datetime??"").slice(0,16).replace("T"," ");
+  const cloud=x.cloud_pct==null?"—":Number(x.cloud_pct).toFixed(1)+"%";
+  const valid=x.local_valid_fraction==null?"—":(Number(x.local_valid_fraction)*100).toFixed(0)+"%";
+  return `${label}: ${dt} UTC • cloud ${cloud} • valid ${valid} • NBR ${dossierNum(x.nbr,3)} • NDVI ${dossierNum(x.ndvi,3)}`;
 }
-function eventLine(e:any){
-  const dist=e.distance_km==null?"":` • ${num(e.distance_km,2)} km`;
-  return `#${shortId(e.id)} • ${esc(e.region??"Unassigned")} • ${esc(e.lifecycle_status??e.status)}${dist}\n${num(e.latitude,5)}, ${num(e.longitude,5)} • obs ${Number(e.observation_count??0)} • sources ${Number(e.multisource_count??0)} • FRP max ${num(e.max_frp_mw,1)} MW`;
+async function satelliteText(sb:any,q?:string){
+  const {data,error}=await sb.rpc("firewatch_satellite_evidence",{p_query:q?.trim()||null});if(error)throw error;if(!data)return"Satellite Evidence: событие не найдено.";
+  const e:any=data,b=e.before??null,a=e.after??null;
+  const lines=[`🛰 Satellite Surface Evidence #${String(e.event_id).slice(0,8)}`,`Область: ${e.oblast??"—"}`,`Координаты: ${dossierNum(e.latitude,5)}, ${dossierNum(e.longitude,5)}`,`Статус: ${e.status??"pending"} • ROI ${e.roi_radius_m??500} м`,`Источник: ${e.provider??"Element84 Earth Search"} / ${e.collection??"sentinel-2-l2a"}`,"",satelliteSceneLine("До",b),satelliteSceneLine("После",a)];
+  if(e.status==="waiting_after"){const nr=String(e.next_retry_at??"").slice(0,16).replace("T"," ");lines.push(`После: ожидается; следующий поиск ${nr||"после +24 ч"} UTC.`)}
+  if(e.status==="pending")lines.push("Surface Evidence ещё не запрашивался для этого события.");
+  if(e.dnbr!=null)lines.push("",`dNBR (до − после): ${Number(e.dnbr).toFixed(3)}`,`ΔNDVI (после − до): ${dossierNum(e.dndvi,3)}`,`Модуль спектрального изменения: ${e.spectral_change_magnitude??"—"}`);
+  lines.push(`Визуализация: ${e.visual?.status==="ready"?"✅ готова":e.status==="ready"?"🟡 будет сформирована при запросе":"—"}`);
+  if(b?.stac_url)lines.push("",`STAC до: ${b.stac_url}`);
+  if(a?.stac_url)lines.push(`STAC после: ${a.stac_url}`);
+  if(b?.thumbnail_url)lines.push(`Preview до: ${b.thumbnail_url}`);
+  if(a?.thumbnail_url)lines.push(`Preview после: ${a.thumbnail_url}`);
+  if(e.last_error)lines.push("",`Последняя ошибка: ${String(e.last_error).slice(0,500)}`);
+  lines.push("","ℹ️ NBR/NDVI рассчитаны по локальной зоне с маской Sentinel-2 SCL. Это подтверждение изменения спектрального отклика поверхности, а не установление причины события.");
+  return lines.join("\n").slice(0,3900);
 }
-async function statusText(sb:any){
-  const {data,error}=await sb.rpc("firewatch_admin_summary");if(error)throw error;
-  const c=data?.counts??{},f=data?.firms??{},t=data?.telegram??{},b=data?.bootstrap??{};
-  const cr=Array.isArray(data?.cron)?data.cron:[];
-  return [
-    `🛠 <b>${esc(data?.project?.project_name??"FIRMSGeoTools")}</b>`,
-    `Bootstrap: ${b.done?"✅ complete":"⏳ pending"}`,
-    `FIRMS: ${esc(f.status??"not run")} • ${esc(age(f.last_success_run))}`,
-    `Telegram: ${esc(t.status??"not run")} • ${esc(age(t.last_success_run))}`,
-    `Cron: ${cr.filter((x:any)=>x.active).length}/${cr.length} active`,
+async function ensureSatelliteEvidence(sb:any,q?:string){
+  try{
+    const {data:e,error}=await sb.rpc("firewatch_satellite_evidence",{p_query:q?.trim()||null});
+    if(error||!e)return null;
+    if(e.available&&e.status&&e.status!=="pending")return e;
+    const {data:cronSecret,error:ce}=await sb.rpc("firewatch_optional_vault_secret",{p_name:"firewatch_cron_secret"});
+    if(ce||!cronSecret)return e;
+    const base=Deno.env.get("SUPABASE_URL");if(!base)return e;
+    const r=await fetch(base+"/functions/v1/firewatch-satellite-evidence",{
+      method:"POST",
+      headers:{"content-type":"application/json","x-cron-secret":String(cronSecret)},
+      body:JSON.stringify({mode:"event",event_id:String(e.event_id)}),
+      signal:AbortSignal.timeout(120000)
+    });
+    if(!r.ok)return e;
+    return (await sb.rpc("firewatch_satellite_evidence",{p_query:String(e.event_id).slice(0,8)})).data??e;
+  }catch{return null}
+}
+async function generateEventReport(sb:any,q?:string){
+  const {data:e,error}=await sb.rpc("firewatch_dossier",{p_query:q?.trim()||null});
+  if(error||!e?.event?.id)return null;
+  const {data:cronSecret,error:ce}=await sb.rpc("firewatch_optional_vault_secret",{p_name:"firewatch_cron_secret"});
+  if(ce||!cronSecret)return null;
+  const base=Deno.env.get("SUPABASE_URL");if(!base)return null;
+  const r=await fetch(base+"/functions/v1/firewatch-event-report",{
+    method:"POST",
+    headers:{"content-type":"application/json","x-cron-secret":String(cronSecret)},
+    body:JSON.stringify({event_id:String(e.event.id).slice(0,8)}),
+    signal:AbortSignal.timeout(120000)
+  });
+  const j=await r.json();return r.ok&&j?.ok?j:null;
+}
+async function sendEventReport(sb:any,token:string,adminId:string,q?:string){
+  await ensureSatelliteEvidence(sb,q);
+  const r=await generateEventReport(sb,q);
+  if(!r){await tg(token,"sendMessage",{chat_id:adminId,text:"📋 Не удалось сформировать отчёт события.",reply_markup:panelKeyboard});return false}
+  const classes=Array.isArray(r.evidence_classes)?r.evidence_classes.join(", "):"—";
+  const missing=Array.isArray(r.missing_classes)&&r.missing_classes.length?r.missing_classes.join(", "):"нет";
+  const text=[
+    `📋 EVENT EVIDENCE REPORT #${String(r.event_id).slice(0,8)}`,
+    `Coverage: ${r.coverage_available}/${r.coverage_expected} классов данных`,
+    `Доступно: ${classes}`,
+    `Пока нет: ${missing}`,
+    `Sentinel-2 Surface: ${r.surface_status??"pending"} • visual ${r.visual_status??"pending"}`,
     "",
-    `Detections 24h: <b>${Number(c.detections_24h??0)}</b>`,
-    `New events 24h: <b>${Number(c.events_new_24h??0)}</b>`,
-    `Touched events 24h: ${Number(c.events_touched_24h??0)}`,
-    `Pending Telegram: ${Number(c.pending_telegram??0)}`,
-    `Regions: ${Number(c.regions??0)}`
+    "Coverage показывает наличие классов данных, а не уверенность, опасность или причинную связь.",
+    "Ссылки действуют 6 часов."
   ].join("\n");
+  const kb={inline_keyboard:[
+    [{text:"{} JSON",url:r.json_url}],
+    [{text:"↩️ Админ-панель",callback_data:"admin:status"}]
+  ]};
+  if(r.html_download_url){
+    const fr=await fetch(r.html_download_url,{signal:AbortSignal.timeout(20000)});
+    if(!fr.ok)throw new Error(`report download HTTP ${fr.status}`);
+    const bytes=new Uint8Array(await fr.arrayBuffer());
+    await tgDocument(token,adminId,bytes,`event-report-${String(r.event_id).slice(0,8)}.html`,text,kb);
+  }else{
+    await tg(token,"sendMessage",{chat_id:adminId,text,reply_markup:kb,disable_web_page_preview:true});
+  }
+  return true;
 }
-async function coverageText(sb:any){
-  const [
-    {data:sum,error:e1},{data:cfg,error:e2},{data:cov,error:e3},
-    {data:base,error:e4},{data:notif,error:e5},{data:geo,error:e6}
-  ]=await Promise.all([
-    sb.rpc("firewatch_admin_summary"),sb.rpc("firewatch_runtime_config"),
-    sb.rpc("firewatch_source_coverage_summary"),sb.rpc("firewatch_source_baseline_summary"),
-    sb.rpc("firewatch_notification_integrity_summary"),sb.rpc("firewatch_geo_integrity_summary")
+async function sendSatelliteVisual(sb:any,token:string,adminId:string,q?:string){
+  try{
+    const {data:e,error}=await sb.rpc("firewatch_satellite_evidence",{p_query:q?.trim()||null});
+    if(error||!e||e.status!=="ready")return false;
+    const {data:cronSecret,error:ce}=await sb.rpc("firewatch_optional_vault_secret",{p_name:"firewatch_cron_secret"});
+    if(ce||!cronSecret)return false;
+    const base=Deno.env.get("SUPABASE_URL");if(!base)return false;
+    const r=await fetch(base+"/functions/v1/firewatch-satellite-visual",{
+      method:"POST",
+      headers:{"content-type":"application/json","x-cron-secret":String(cronSecret)},
+      body:JSON.stringify({event_id:String(e.event_id)}),
+      signal:AbortSignal.timeout(120000)
+    });
+    const j=await r.json();if(!r.ok||!j?.ok||!j?.signed_url)return false;
+    const caption=`🛰 Sentinel-2 Surface Evidence • ID ${String(e.event_id).slice(0,8)}\nBEFORE / AFTER / SWIR / dNBR • ROI ~1×1 км\nСпектральное изменение поверхности; не причинная атрибуция.`;
+    await tg(token,"sendPhoto",{chat_id:adminId,photo:j.signed_url,caption});
+    return true;
+  }catch{return false}
+}
+async function dossierText(sb:any,q?:string){
+  const {data,error}=await sb.rpc("firewatch_dossier",{p_query:q?.trim()||null})
+    .abortSignal(AbortSignal.timeout(7000));if(error)throw error;if(!data)return"Досье: событие не найдено.";
+  const d:any=data,e=d.event??{},sat=d.satellite??{},surf=d.satellite_surface??{},atm=d.atmosphere??{},geo=d.geospatial??{},inf=d.infrastructure??{},ground=d.ground??{},ext=d.external_osint??{},pub=d.public_osint??{},air=d.air_threat_context??{},hist=d.history??{};
+  const flags:string[]=Array.isArray(d.context_flags)?d.context_flags:[],classes:string[]=Array.isArray(d.evidence_classes)?d.evidence_classes:[],infra:any[]=Array.isArray(inf.features)?inf.features:[];
+  const duration=Number(e.duration_minutes??0),durationText=duration>=60?(duration/60).toFixed(1)+" ч":Math.round(duration)+" мин";
+  const declared=Array.isArray(sat.declared_sources)?sat.declared_sources.join(", "):"—";
+  const lines:string[]=[
+    `📑 EVENT OSINT DOSSIER #${String(e.id).slice(0,8)}`,
+    `Область: ${e.oblast??"—"}`,
+    `Координаты: ${dossierNum(e.latitude,5)}, ${dossierNum(e.longitude,5)}`,
+    `Период: ${String(e.first_seen??"").slice(0,16).replace("T"," ")} → ${String(e.last_seen??"").slice(0,16).replace("T"," ")} UTC • ${durationText}`,
+    `Наблюдений: ${e.observation_count??0} • спутниковых платформ: ${sat.source_count??0}`,
+    `Источники: ${declared}`,
+    `Уверенность детекции: ${e.confidence_label??e.confidence_level??"—"}`,
+    "",
+    `🔥 FRP max: ${dossierNum(sat.frp_max_mw,1)} МВт • avg: ${dossierNum(sat.frp_avg_mw,1)} МВт • тренд: ${sat.frp_trend??"—"}`,
+    `Кластер: ${sat.cluster_diameter_m==null?"—":Math.round(Number(sat.cluster_diameter_m))+" м"}`,
+    "",
+    `🛰 Sentinel-2 Surface: ${surf.status??"pending"}`,
+    satelliteSceneLine("До",surf.before),
+    surf.after?satelliteSceneLine("После",surf.after):surf.status==="waiting_after"?`После: ожидается • следующий поиск ${String(surf.next_retry_at??"").slice(0,16).replace("T"," ")} UTC`:satelliteSceneLine("После",surf.after)
+  ];
+  if(surf.dnbr!=null)lines.push(`dNBR ${Number(surf.dnbr).toFixed(3)} • ΔNDVI ${dossierNum(surf.dndvi,3)} • ${surf.spectral_change_magnitude??"—"}`);
+  if(surf.visual?.status==="ready")lines.push("Visual evidence: ✅ cached");
+  lines.push("",`🗺 Контекст: ${geo.context_type??"—"} • ближайший ${geo.nearest_feature??"—"} ${geo.nearest_feature_distance_m==null?"":("("+Math.round(Number(geo.nearest_feature_distance_m))+" м)")}`,`⚙️ Инфраструктура: ${inf.feature_count??0} объектов`);
+  for(const x of infra.slice(0,4)){const dist=Number(x.distance_m)<1000?Math.round(Number(x.distance_m))+" м":(Number(x.distance_m)/1000).toFixed(1)+" км",detail=infraProfileText(x);lines.push(`• ${x.infra_label??x.infra_type}: ${x.name??"—"} • ${dist}${detail?" • "+detail:""}`)}
+  lines.push("",`🌫 Атмосфера: ${atm.signal_level??"—"} • CAMS PM2.5 ${dossierNum(atm.cams_pm2_5_ug_m3,1)} µg/m³ • CO ${dossierNum(atm.cams_co_ug_m3,0)} µg/m³`);
+  if(atm.s5p_co_mol_m2!=null)lines.push(`Sentinel-5P CO: ${dossierNum(atm.s5p_co_mol_m2,4)} mol/m²`);
+  lines.push(`Наземные станции: ${ground.station_count??0} • внешние OSINT-источники: ${ext.source_count??0}`);
+  const news:any[]=Array.isArray(pub.news)?pub.news:[],alerts:any[]=Array.isArray(pub.air_alert_context)?pub.air_alert_context:[],tg:any[]=Array.isArray(pub.telegram)?pub.telegram:[];
+  lines.push("",`📰 Public OSINT: новости ${pub.news_count??0} • TG ${pub.telegram_count??0} • air-alert ${pub.air_alert_context_count??0}`);
+  for(const x of news.slice(0,3)){
+    const when=x.published_at?String(x.published_at).slice(0,16).replace("T"," ")+" UTC":"—";
+    lines.push(`• [NEWS/${x.source??"source"}] ${String(x.title??"—").slice(0,170)}\n  ${when} • relevance ${Number(x.relevance_score??0)}/100`);
+  }
+  for(const x of tg.slice(0,4)){
+    const when=x.published_at?String(x.published_at).slice(0,16).replace("T"," ")+" UTC":"—";
+    const scope=x?.match_basis?.location?.kind==="nearest_place"?"local":"regional";
+    lines.push(`• [TG/${x.source??"channel"} • ${scope}] ${String(x.title??"—").replace(/\s+/g," ").slice(0,190)}\n  ${when} • relevance ${Number(x.relevance_score??0)}/100`);
+  }
+  for(const x of alerts.slice(0,2)){
+    lines.push(`• [AIR ALERT] ${String(x.title??"—").slice(0,180)} • ${x.observed_at?String(x.observed_at).slice(0,16).replace("T"," ")+" UTC":"—"}`);
+  }
+  const airTracks:any[]=Array.isArray(air.tracks)?air.tracks:[];
+  lines.push("",`✈️ Neptun air-threat context: ${air.count??0}`);
+  for(const x of airTracks.slice(0,4)){
+    const d=Number(x.nearest_distance_m??0),dist=d<1000?Math.round(d)+" м":(d/1000).toFixed(1)+" км";
+    const off=Number(x.time_offset_seconds??0),offm=Math.round(Math.abs(off)/60),when=off===0?"одновременно":off<0?`${offm} мин до FIRMS`:`${offm} мин после FIRMS`;
+    const conf=Number.isFinite(Number(x.confidence_0_100))?` • confidence ${Math.round(Number(x.confidence_0_100))}/100`:"";
+    const head=Number.isFinite(Number(x.heading_deg))?` • курс ${Math.round(Number(x.heading_deg))}°`:"";
+    lines.push(`• ${x.label??x.type??"air threat"} • ${dist} • ${when}${head}${conf}`);
+  }
+  lines.push("",`🕓 История: 30д ${hist.events_30d??0} • 90д ${hist.events_90d??0} • 365д ${hist.events_365d??0} • класс ${hist.hotspot_class??"—"}`);
+  lines.push("",`Классы доказательств: ${classes.length?classes.join(", "):"—"}`);
+  if(flags.length){lines.push("Контекст-флаги:",...flags.slice(0,12).map(x=>"• "+(DOSSIER_FLAG_LABELS[x]??x)))}
+  if(inf.openinframap_url)lines.push("",`OpenInfraMap: ${inf.openinframap_url}`);
+  lines.push("","ℹ️ Досье агрегирует публичные наблюдения. Новости, воздушные тревоги, треки Neptun, географические совпадения, флаги и спектральные метрики являются контекстом и не устанавливают причину тепловой аномалии.");
+  return lines.join("\n").slice(0,3900);
+}
+function infraProfileText(x:any){const p=x?.profile??{},parts:string[]=[];const add=(label:string,v:any)=>{if(v!=null&&String(v)!=="")parts.push(label+" "+String(v).slice(0,80))};if(p.voltage){const v=Number(String(p.voltage).split(";")[0]);add("U:",Number.isFinite(v)?(v>=1000?(v/1000).toFixed(v%1000?1:0)+" кВ":v+" В"):p.voltage)}add("цепей:",p.circuits);add("f:",p.frequency);add("мощн.:",p.output);add("источник:",p.source);add("вещество:",p.substance);add("usage:",p.usage);add("Ø:",p.diameter);add("P:",p.pressure);add("оператор:",p.operator);add("ref:",p.ref);return parts.join(" • ")}
+async function geoText(sb:any,q?:string){
+  const [{data,error},{data:stRow},{data:ghRow}]=await Promise.all([
+    sb.rpc("firewatch_geo_context",{p_query:q?.trim()||null}),
+    sb.from("system_state").select("value").eq("key","monitor_geo_osint").maybeSingle(),
+    sb.from("system_state").select("value").eq("key","monitor_ghsl").maybeSingle()
   ]);
-  if(e1)throw e1;if(e2)throw e2;if(e3)throw e3;if(e4)throw e4;if(e5)throw e5;if(e6)throw e6;
-
-  const live=new Map((sum?.firms?.sources??[]).map((x:any)=>[x.source,x]));
-  const coverage=new Map((cov?.sources??[]).map((x:any)=>[x.source_id,x]));
-  const anomalies=new Map((base?.sources??[]).map((x:any)=>[x.source_id,x]));
-  const geoSrc=new Map((geo?.sources??[]).map((x:any)=>[x.source_id,x]));
-  const lines=["🛰 <b>Integrity & Coverage</b>",""];
-
-  for(const s of cfg?.sources??[]){
-    const l:any=live.get(s.source_id),cv:any=coverage.get(s.source_id),an:any=anomalies.get(s.source_id),gs:any=geoSrc.get(s.source_id);
-    const mark=cv?.status==="active"&&Number(gs?.missing_in_db??0)===0?"✅":cv?.status?"⚠️":"⚪";
-    lines.push(`${mark} <b>${esc(s.display_name)}</b>`);
-    lines.push(`   worker ${esc(cv?.status??"unknown")} • activity ${esc(cv?.activity??"unknown")} • baseline ${esc(an?.status??"learning")}`);
-    lines.push(`   fetched ${Number(l?.fetched??cv?.fetched_last_run??0)} • recent ${Number(l?.recent??cv?.recent_last_run??0)} • DB 24h ${Number(cv?.detections_24h??0)}`);
-    if(gs)lines.push(`   audit API ${Number(gs.api_recent??0)} → AOI ${Number(gs.inside_aoi??0)} → DB ${Number(gs.db_matched??0)} • missing ${Number(gs.missing_in_db??0)}`);
-  }
-
-  const ns=notif?.state??{},gg=geo?.state??{},bs=base?.state??{},cs=cov?.state??{};
-  lines.push("",
-    `Source Coverage: <b>${esc(cs.status??"unknown")}</b> • active ${Number(cs.sources_active??0)}/${Number(cs.sources_total??0)} • degraded ${Number(cs.sources_degraded??0)}`,
-    `Baseline: <b>${esc(bs.status??"learning")}</b> • watch ${Number(bs.sources_watch??0)} • anomaly ${Number(bs.sources_anomaly??0)}`,
-    `Notification Integrity: <b>${esc(ns.status??"unknown")}</b> • gaps ${Number(ns.notification_gaps??0)} • backlog ${Number(ns.delivery_backlog??0)}`,
-    `Geo Integrity: <b>${esc(gg.status??"unknown")}</b> • API ${Number(gg.api_recent??0)} → AOI ${Number(gg.inside_aoi??0)} → DB ${Number(gg.db_matched??0)} • missing ${Number(gg.missing_in_db??0)}`
-  );
-  return lines.join("\n");
-}
-async function eventsText(sb:any){
-  const {data,error}=await sb.rpc("firewatch_search_events",{p_filters:{limit:10}});if(error)throw error;
-  const ev=Array.isArray(data?.events)?data.events:[];
-  return `🔥 <b>Latest events</b>\n\n${ev.map(eventLine).join("\n\n")||"No events."}`;
-}
-async function eventText(sb:any,q?:string){
-  const {data:e,error}=await sb.rpc("firewatch_event_detail",{p_query:q?.trim()||null});if(error)throw error;
-  if(!e)return"Event not found.";
-  return [
-    `🔥 <b>Event #${shortId(e.id)}</b>`,
-    `Region: ${esc(e.region??"Unassigned")}`,
-    `Status: ${esc(e.lifecycle_status??e.status)}`,
-    `First: ${esc(e.first_seen)}`,
-    `Last: ${esc(e.last_seen)}`,
-    `Coordinates: <code>${num(e.latitude,5)}, ${num(e.longitude,5)}</code>`,
-    `Resolution: ${e.resolution_m==null?"—":Number(e.resolution_m)+" m"}`,
-    `Observations: ${Number(e.observation_count??0)}`,
-    `Platforms: ${Number(e.multisource_count??0)}`,
-    `Sources: ${esc((e.sources??[]).join(", ")||"—")}`,
-    `FRP max / avg: ${num(e.max_frp_mw,1)} / ${num(e.avg_frp_mw,1)} MW`,
-    `Telegram: ${e.telegram_sent?"✅ sent":"⏳ not sent"}${e.telegram_message_id?` • message ${e.telegram_message_id}`:""}`
-  ].join("\n");
-}
-async function analyticsParts(sb:any,h=24){
-  const {data,error}=await sb.rpc("firewatch_analytics_summary",{p_hours:h});if(error)throw error;
-  const e=data?.events??{},frp=data?.frp??{},regions=Array.isArray(data?.by_region)?data.by_region:[],src=Array.isArray(data?.by_source)?data.by_source:[];
+  if(error)throw error;
+  const st=stRow?.value??{},ghst=ghRow?.value??{};
+  if(!data)return"Геоконтекст: событие не найдено.";
+  const e:any=data,rows:any[]=Array.isArray(e.features)?e.features:[],infra:any[]=Array.isArray(e.infrastructure_features)?e.infrastructure_features:[],cats=e.categories??{},infraCounts=e.infrastructure_counts??{},rings=e.infrastructure_rings??{},flags:any[]=Array.isArray(e.infrastructure_context_flags)?e.infrastructure_context_flags:[],gh=e.ghsl??null;
+  const catText=Object.entries(cats).sort((a:any,b:any)=>Number(b[1])-Number(a[1])).slice(0,8).map(([k,v])=>`${k}: ${v}`).join(" • ");
+  const infraNames=new Map(infra.map((x:any)=>[String(x.infra_type),String(x.infra_label??x.infra_type)]));
+  const infraCountText=Object.entries(infraCounts).sort((a:any,b:any)=>Number(b[1])-Number(a[1])).slice(0,8).map(([k,v])=>`${infraNames.get(String(k))??k}: ${v}`).join(" • ");
+  const ringText=[500,1000,2000,5000,10000].map(r=>`${r<1000?r+"м":r/1000+"км"} ${Number(rings?.[String(r)]?.total??0)}`).join(" • ");
+  const flagMap:Record<string,string>={
+    near_power_line_500m:"ЛЭП ≤500 м",near_power_infrastructure_2km:"энергоинфра ≤2 км",
+    near_pipeline_1km:"трубопровод ≤1 км",near_petroleum_infrastructure_2km:"нефтегаз ≤2 км",
+    near_industrial_2km:"промзона ≤2 км",major_power_5km:"ВН энергетика ≤5 км",
+    telecom_infrastructure_1km:"телеком ≤1 км",water_infrastructure_1km:"водная инфра ≤1 км"
+  };
   const head=[
-    `📈 <b>Analytics • ${h} h</b>`,
-    `New events: <b>${Number(e.new??0)}</b> • active ${Number(e.active_new??0)} • closed ${Number(e.closed_new??0)}`,
-    `Touched: ${Number(e.touched??0)}`,
-    `Telegram sent in window: ${Number(e.telegram_sent??0)}`,
-    `Multisource new: ${Number(e.multisource_new??0)}`,
-    `Detections: ${Number(frp.detections??0)} • FRP max ${num(frp.max_mw,1)} MW • avg ${num(frp.avg_mw,1)} MW`,
-    `Unassigned events: ${Number(data?.unassigned??0)}`,
-    "",
-    "<b>Sources</b>",
-    ...(src.map((x:any)=>`• ${esc(x.source)}: ${Number(x.detections??0)}`))
-  ].join("\n");
-  const parts=[head];
-  let cur="<b>All regions</b>\n";
-  for(const r of regions){
-    const line=`• ${esc(r.region)}: ${Number(r.events??0)}\n`;
-    if(cur.length+line.length>3500){parts.push(cur.trim());cur="<b>All regions (continued)</b>\n"}
-    cur+=line;
+    `🗺 Geo / Infrastructure OSINT #${String(e.id).slice(0,8)}`,
+    `Область: ${e.oblast??"—"}`,
+    `Координаты: ${Number(e.latitude).toFixed(5)}, ${Number(e.longitude).toFixed(5)}`,
+    `Geo worker: ${st.status??"—"} • ${ageText(st.last_check)}`,
+    `GHSL: ${ghst.status??"—"} • ${ageText(ghst.last_check)}`,
+    `Кэш OSM: ${e.cache_available?"✅ есть":"—"} • радиус ${Math.round(Number(e.query_radius_m??10000)/1000)} км • ${e.queried_at?ageText(e.queried_at):"нет снимка"}`,
+    e.endpoint?`Источник OSM: ${String(e.endpoint).replace("https://","")} • ${e.endpoint_method??"—"}`:null,
+    `OSM-объектов: ${e.feature_count??0} • общий контекст: ${e.context_type??"не определён"}`,
+    e.nearest_feature?`Ближайший объект: ${e.nearest_feature} • ${Math.round(Number(e.nearest_feature_distance_m??0))} м`:null,
+    e.infra_profile_version?`Инфраструктура: ${e.infra_profile_version}`:null,
+    infraCountText?`Инфра-классы: ${infraCountText}`:null,
+    ringText?`Инфра по радиусам: ${ringText}`:null
+  ].filter(Boolean);
+  if(flags.length)head.push(`Контекст-флаги: ${flags.map((x:any)=>flagMap[String(x)]??String(x)).join(" • ")}`);
+  if(gh){
+    const n=(x:any)=>Number.isFinite(Number(x))?Math.round(Number(x)).toLocaleString("ru-RU"):"—";
+    const p=(x:any)=>Number.isFinite(Number(x))?Number(x).toFixed(2)+"%":"—";
+    head.push("","👥 GHSL — население и застройка:",`Эпоха: ${gh.epoch??2025} • ${gh.resolution??"~1 км"}`,`Население ≈ 1 км: ${n(gh.population_1km)} • 5 км: ${n(gh.population_5km)} • 10 км: ${n(gh.population_10km)}`,`Застройка ≈ 1 км: ${p(gh.built_fraction_1km_pct)} • 5 км: ${p(gh.built_fraction_5km_pct)} • 10 км: ${p(gh.built_fraction_10km_pct)}`,`Ячейка события: население ~${n(gh.population_cell)} • built-up ${n(gh.built_surface_cell_m2)} м²`);
+    if(gh.last_error)head.push(`GHSL ошибка: ${String(gh.last_error).slice(0,300)}`);
   }
-  if(regions.length)parts.push(cur.trim());
-  return parts;
+  if(e.last_error)head.push("",`Последняя ошибка OSM: ${String(e.last_error).slice(0,500)}`);
+  head.push("","⚙️ Инфраструктурный профиль:");
+  if(!infra.length)head.push("В радиусе не найдено объектов инфраструктуры из текущей OpenInfraMap-совместимой таксономии.");
+  else{
+    for(const [i,x] of infra.slice(0,10).entries()){
+      const dist=Number(x.distance_m)<1000?Math.round(Number(x.distance_m))+" м":(Number(x.distance_m)/1000).toFixed(1)+" км",detail=infraProfileText(x);
+      head.push(`${i+1}. [${x.infra_label??x.infra_type}] ${x.name??"—"} • ${dist}${detail?"\n   "+detail:""}`);
+    }
+  }
+  const general=rows.filter((x:any)=>!x.infra_type);
+  if(general.length){
+    head.push("","🧭 Прочий геоконтекст:");
+    for(const [i,x] of general.slice(0,5).entries())head.push(`${i+1}. [${x.label??x.category}] ${x.name??"—"} • ${Number(x.distance_m)<1000?Math.round(Number(x.distance_m))+" м":(Number(x.distance_m)/1000).toFixed(1)+" км"}`);
+  }
+  if(catText)head.push("",`Все категории: ${catText}`);
+  head.push("","ℹ️ GHSL: European Commission JRC, GHS-POP/GHS-BUILT-S. Инфраструктура: © OpenStreetMap contributors через Geofabrik Postpass, таксономия адаптирована по OpenInfraMap. Значения GHSL в радиусах приблизительные из-за разрешения ~1 км. Близость инфраструктуры не доказывает причинную связь.");
+  return head.join("\n").slice(0,3900);
 }
-async function searchText(sb:any,cmd:string){
-  const filters=parseSearch(cmd);
+async function groundText(sb:any,q?:string){const [{data,error},{data:stRow}]=await Promise.all([sb.rpc("firewatch_ground_context",{p_query:q?.trim()||null}),sb.from("system_state").select("value").eq("key","monitor_ground_osint").maybeSingle()]);if(error)throw error;const st=stRow?.value??{};if(!data)return"Наземные датчики: событие не найдено.";const e:any=data,rows:any[]=Array.isArray(e.measurements)?e.measurements:[];const head=[`🌫 Ground OSINT #${String(e.id).slice(0,8)}`,`Область: ${e.oblast??"—"}`,`Координаты: ${Number(e.latitude).toFixed(5)}, ${Number(e.longitude).toFixed(5)}`,`Станций в контексте: ${e.station_count??0} • источников: ${e.source_count??0}`,`Worker: ${st.status??"—"} • проверка ${ageText(st.last_check)}`,`Sensor.Community: ${st.sensor_community?.error?"⚠️ ошибка":"✅ live"} • OpenAQ: ${st.openaq?.configured?"✅ configured":"🟡 нужен API key"} • SaveEcoBot allow-list: ${st.saveecobot?.registry_sources??0}`];if(!rows.length)head.push("","Подходящих наземных измерений в радиусе 25 км и окне ±12 ч не найдено.");else{head.push("");for(const [i,x] of rows.entries()){const dist=x.distance_km==null?"—":Number(x.distance_km).toFixed(1)+" км",dt=x.time_delta_h==null?"—":Number(x.time_delta_h).toFixed(1)+" ч",val=Number.isFinite(Number(x.value))?Number(x.value).toFixed(2):String(x.value??"—");head.push(`${i+1}. [${x.source}] ${x.station_name??x.station_id}\n   ${x.parameter}: ${val}${x.unit?" "+x.unit:""} • ${dist} • Δt ${dt}\n   ${String(x.observed_at??"").slice(0,16).replace("T"," ")} UTC${x.is_old?" • устаревшее":""}`)}}head.push("","ℹ️ Наземные измерения — независимый экологический контекст и не доказывают связь загрязнения с конкретной тепловой аномалией.");return head.join("\n").slice(0,3900)}
+async function osintText(sb:any,q?:string){const [{data,error},{data:stRow}]=await Promise.all([sb.rpc("firewatch_osint_event_detail",{p_query:q?.trim()||null}),sb.from("system_state").select("value").eq("key","monitor_osint").maybeSingle()]);if(error)throw error;const st=stRow?.value??{};if(!data)return"OSINT: событие не найдено.";const e:any=data,rows:any[]=Array.isArray(e.evidence)?e.evidence:[];const head=[`🔎 OSINT #${String(e.id).slice(0,8)}`,`Область: ${e.oblast??"—"}`,`Координаты: ${Number(e.latitude).toFixed(5)}, ${Number(e.longitude).toFixed(5)}`,`Независимых OSINT-источников: ${e.source_count??0} • записей: ${e.evidence_count??0}`,`Worker: ${st.status??"—"} • ${ageText(st.last_success_run)}`];if(!rows.length)head.push("","Связанных публичных OSINT-событий в текущем пространственно-временном окне не найдено.");else{head.push("");for(const [i,x] of rows.entries()){const dist=x.distance_km==null?"—":Number(x.distance_km).toFixed(1)+" км",dt=x.time_delta_h==null?"—":Number(x.time_delta_h).toFixed(1)+" ч";head.push(`${i+1}. [${x.source}] ${String(x.title??"").slice(0,180)}\n   ${String(x.observed_at??"").slice(0,16).replace("T"," ")} UTC • ${dist} • Δt ${dt}\n   ${x.category??"—"} • ${x.correlation_class??"unmatched"}${x.source_url?`\n   Источник: ${String(x.source_url).slice(0,900)}`:""}`)}}head.push("","ℹ️ Пространственно-временная корреляция — контекст OSINT, а не доказательство причинной связи.");return head.join("\n").slice(0,3900)}
+async function integrityText(sb:any){
+  const {data,error}=await sb.rpc("firewatch_notification_integrity_summary");if(error)throw error;
+  const state:any=data?.state??{},findings:any[]=Array.isArray(data?.findings)?data.findings:[];
+  const lines=[
+    "🧪 Notification Integrity / Stage 30.2",
+    `Статус: ${state.status??"—"}`,
+    `Проверка: ${ageText(state.last_success_run)}`,
+    `Ошибки: ${Number(state.errors??0)} • предупреждения: ${Number(state.warnings??0)} • info: ${Number(state.info??0)}`,
+    "",
+    `Notification gaps: ${Number(state.notification_gaps??0)}`,
+    `Delivery backlog >45 мин: ${Number(state.delivery_backlog??0)}`,
+    `MTG support-only: ${Number(state.support_only_mtg??0)}`,
+    `Sentinel-3 support-only: ${Number(state.support_only_sentinel3??0)}`,
+    `MTG + Sentinel-3 support-only: ${Number(state.support_only_multi_sensor??0)}`,
+    `Historical suppressed: ${Number(state.historical_suppressed??0)}`
+  ];
+  const important=findings.filter((x:any)=>x.severity==="error"||x.severity==="warning").slice(0,10);
+  if(important.length){
+    lines.push("","Требуют внимания:");
+    for(const x of important){
+      lines.push(`• #${String(x.event_id).slice(0,8)} • ${x.class} • ${String(x.last_detection??"").slice(0,16).replace("T"," ")} UTC`);
+    }
+  }else lines.push("","✅ Пропусков/зависшей доставки по правилам Stage 30.2 не обнаружено.");
+  lines.push("","ℹ️ support-only и historical — информационные категории, а не ошибки. Они не публикуются автоматически без действующего правила подтверждения.");
+  return lines.join("\n").slice(0,3900);
+}
+function parseSearchArgs(raw:string){
+  const out:any={};
+  for(const token of raw.trim().split(/\s+/).filter(Boolean)){
+    const i=token.indexOf("=");if(i<1)continue;
+    const k=token.slice(0,i).toLowerCase(),v=token.slice(i+1).trim();if(!v)continue;
+    if(["id","oblast","status","source","surface","flag","from","to"].includes(k))out[k]=v;
+    else if(k==="min_frp")out.min_frp=Number(v);
+    else if(k==="min_obs"||k==="obs")out.min_obs=Number(v);
+    else if(k==="min_platforms"||k==="platforms")out.min_platforms=Number(v);
+    else if(k==="limit")out.limit=Math.min(50,Math.max(1,Number(v)));
+    else if(k==="sent")out.sent=["1","true","yes","да"].includes(v.toLowerCase());
+    else if(k==="radius"||k==="radius_km"||k==="r")out.radius_km=Number(v.replace(",","."));
+    else if(k==="coord"||k==="coords"||k==="center"){
+      const m=v.replace(";",",").split(",");
+      if(m.length===2){out.lat=Number(m[0]);out.lon=Number(m[1])}
+    }
+    else if(k==="lat")out.lat=Number(v.replace(",","."));
+    else if(k==="lon"||k==="lng")out.lon=Number(v.replace(",","."));
+  }
+  if(out.lat!=null&&out.lon!=null&&out.radius_km==null)out.radius_km=10;
+  return out;
+}
+async function searchText(sb:any,arg:string){
+  const filters=parseSearchArgs(arg);
+  if(!Object.keys(filters).length)return [
+    "🔎 Поиск событий",
+    "",
+    "📍 По координате — ручной ввод:",
+    "/search coord=47.87557,37.67172 radius=10",
+    "",
+    "Дополнительно история FIRMS:",
+    "/nearby 47.87557 37.67172",
+    "",
+    "Радиус поиска задаётся в километрах: 0.1–500 км.",
+    "Если radius не указан, используется 10 км.",
+    "",
+    "🧩 Комбинированный пример:",
+    "/search coord=47.87557,37.67172 radius=25 min_frp=20 platforms=2 limit=20",
+    "",
+    "Доступные фильтры: id, oblast, status, from, to, min_frp, min_obs, platforms, source, surface, flag, sent, coord, radius, limit"
+  ].join("\n");
+  if(("lat" in filters)!==("lon" in filters))return "⚠️ Координата должна содержать широту и долготу. Пример:\n/search coord=47.87557,37.67172 radius=10";
+  if(filters.lat!=null&&(!Number.isFinite(filters.lat)||!Number.isFinite(filters.lon)))return "⚠️ Не удалось распознать координату. Используйте точку как десятичный разделитель:\n/search coord=47.87557,37.67172 radius=10";
+  if(filters.radius_km!=null&&(!Number.isFinite(filters.radius_km)||filters.radius_km<0.1||filters.radius_km>500))return "⚠️ Радиус должен быть от 0.1 до 500 км.";
   const {data,error}=await sb.rpc("firewatch_search_events",{p_filters:filters});if(error)throw error;
-  const ev=Array.isArray(data?.events)?data.events:[];
-  return `🔎 <b>Search</b> • ${ev.length} result(s)\n\n${ev.map(eventLine).join("\n\n")||"Nothing found."}`;
+  const ev:any[]=Array.isArray(data?.events)?data.events:[];
+  const geo:any=data?.geo??null;
+  const lines=[geo
+    ? `📍 Поиск вокруг ${Number(geo.lat).toFixed(5)}, ${Number(geo.lon).toFixed(5)} • R=${Number(geo.radius_km)} км • найдено ${Number(data?.count??0)}`
+    : `🔎 Поиск событий • найдено ${Number(data?.count??0)}`];
+  for(const e of ev.slice(0,20)){
+    const dist=e.distance_km==null?"":` • 📏 ${Number(e.distance_km).toFixed(Number(e.distance_km)<10?2:1)} км`;
+    lines.push("",
+      `#${String(e.id).slice(0,8)} • ${e.oblast??"—"}${dist}`,
+      `${String(e.last_seen??"").slice(0,16).replace("T"," ")} UTC • FRP max ${e.max_frp==null?"—":Number(e.max_frp).toFixed(1)+" MW"}`,
+      `obs ${Number(e.observation_count??0)} • platforms ${Number(e.multisource_count??0)} • ${e.lifecycle_status??e.status??"—"}`,
+      `Surface ${e.surface_status??"pending"} • Telegram ${e.telegram_sent?"yes":"no"}`,
+      `/event ${String(e.id).slice(0,8)} • /dossier ${String(e.id).slice(0,8)}`
+    );
+  }
+  if(!ev.length)lines.push("","Совпадений в заданном радиусе нет.");
+  return lines.join("\n").slice(0,3900);
 }
-async function doctorText(sb:any){
-  const {data,error}=await sb.rpc("firewatch_core_diagnostics");if(error)throw error;
-  const s=data?.summary??{},checks=Array.isArray(data?.checks)?data.checks:[];
-  const bad=checks.filter((x:any)=>x.status!=="pass");
+async function analyticsText(sb:any,hours=24){
+  const h=Math.max(1,Math.min(8760,Number(hours)||24));
+  const {data,error}=await sb.rpc("firewatch_analytics_summary",{p_hours:h});if(error)throw error;
+  const e:any=data?.events??{},frp:any=data?.frp??{},oblasts:any[]=Array.isArray(data?.by_oblast)?data.by_oblast:[],src:any[]=Array.isArray(data?.by_source)?data.by_source:[];
+  const q:any=data?.quality??{},ni=q.notification_integrity??{},sc=q.source_coverage??{},bl=q.source_baseline??{},gi=q.geo_integrity??{};
+  const lines=[
+    `📈 Analytics / Stage 31 • ${h} ч`,
+    `Новые события: ${Number(e.new??e.total??0)} • active ${Number(e.active??0)} • closed ${Number(e.closed??0)}`,
+    `Обновлялись в окне: ${Number(e.touched??0)} • active ${Number(e.touched_active??0)} • closed ${Number(e.touched_closed??0)}`,
+    `Telegram отправлено в окне: ${Number(e.telegram_sent??0)} • multisource новых: ${Number(e.multisource??0)} • surface ready новых: ${Number(e.surface_ready??0)}`,
+    `FRP детекций окна: max ${frp.max_mw==null?"—":Number(frp.max_mw).toFixed(1)+" MW"} • avg ${frp.avg_mw==null?"—":Number(frp.avg_mw).toFixed(1)+" MW"} • detections ${Number(frp.detections??0)}`,
+    "",
+    "Все области по новым событиям:"
+  ];
+  for(const x of oblasts)lines.push(`• ${x.oblast}: ${x.events}`);
+  lines.push("","Источники по детекциям:");
+  for(const x of src.slice(0,8))lines.push(`• ${x.source}: ${x.detections}`);
+  lines.push("",
+    `Integrity: gaps ${Number(ni.notification_gaps??0)} • backlog ${Number(ni.delivery_backlog??0)}`,
+    `Coverage: active ${Number(sc.sources_active??0)}/${Number(sc.sources_total??0)} • degraded ${Number(sc.sources_degraded??0)}`,
+    `Geo integrity: ${gi.status??"—"} • missing ${Number(gi.missing_in_db??0)}`,
+    `Baseline: ${bl.status??"—"} • watch ${Number(bl.sources_watch??0)} • anomaly ${Number(bl.sources_anomaly??0)}`
+  );
+  return lines.join("\n").slice(0,3900);
+}
+
+async function coverageText(sb:any){
+  const [{data,error},{data:base,error:be},{data:geo,error:ge}]=await Promise.all([
+    sb.rpc("firewatch_source_coverage_summary"),
+    sb.rpc("firewatch_source_baseline_summary"),
+    sb.rpc("firewatch_geo_integrity_summary")
+  ]);
+  if(error)throw error;if(be)throw be;
+  const state:any=data?.state??{},sources:any[]=Array.isArray(data?.sources)?data.sources:[],baseState:any=base?.state??{},baseSources:any[]=Array.isArray(base?.sources)?base.sources:[],baseBy=new Map(baseSources.map((x:any)=>[x.source_id,x]));
+  const gs:any=ge?{}:(geo?.state??{}),go:any[]=ge?[]:(Array.isArray(geo?.oblasts)?geo.oblasts:[]);
+  const lines=[
+    "📡 Source Coverage / Stage 30.3 + Geo Integrity / Stage 33.4",
+    `Статус: ${state.status??"—"}`,
+    `Проверка: ${ageText(state.last_success_run)}`,
+    `Источники: active ${Number(state.sources_active??0)}/${Number(state.sources_total??0)} • degraded ${Number(state.sources_degraded??0)}`,
+    `FIRMS registry: ${state.registry_status??"—"}`,
+    `Baseline: ${baseState.status??"—"} • learning ${Number(baseState.sources_learning??0)} • watch ${Number(baseState.sources_watch??0)} • anomaly ${Number(baseState.sources_anomaly??0)}`,
+    ge?"Geo integrity: недоступен":`Geo integrity: ${gs.status??"—"} • API ${Number(gs.api_recent??0)} → inside ${Number(gs.inside_ukraine??0)} → DB ${Number(gs.db_matched??0)} • missing ${Number(gs.missing_in_db??0)}`,
+    ""
+  ];
+  for(const x of sources){
+    const bx:any=baseBy.get(x.source_id)??{};
+    const icon=x.status!=="active"?"⚠️":bx.status==="anomaly"?"🔴":bx.status==="watch"?"🟡":bx.status==="normal"?"✅":"🧪";
+    const fetch=x.fetched_last_run==null?"—":String(x.fetched_last_run);
+    const recent=x.recent_last_run==null?"—":String(x.recent_last_run);
+    const upstream=x.upstream_age_minutes==null?"—":Number(x.upstream_age_minutes).toFixed(0)+" мин";
+    lines.push(`${icon} ${x.label} • ${x.status} • baseline ${bx.status??"—"}`);
+    lines.push(`   worker ${x.worker_age_minutes==null?"—":Number(x.worker_age_minutes).toFixed(0)+" мин"} • upstream ${upstream} • fetch ${fetch}/recent ${recent}`);
+    lines.push(`   detections: 1ч ${Number(x.detections_1h??0)} • 6ч ${Number(x.detections_6h??0)} • 24ч ${Number(x.detections_24h??0)} • activity ${x.activity??"—"}`);
+    if(Array.isArray(bx.reasons)&&bx.reasons.length){const rr=bx.reasons.slice(0,2).map((r:any)=>`${r.metric}:${r.kind}`).join(", ");lines.push(`   baseline alert: ${rr} • streak ${Number(bx.streak??0)}`)}
+    if(x.last_error)lines.push(`   error: ${String(x.last_error).slice(0,220)}`);
+  }
+  if(!ge){
+    const watchNames=new Set(["Київська","Київ","Одеська","Закарпатська","Львівська","Волинська","Рівненська","Тернопільська","Івано-Франківська","Чернівецька"]);
+    const rows=go.filter((x:any)=>x.status==="degraded"||watchNames.has(x.oblast_name)).filter((x:any)=>Number(x.api_detections??0)>0||x.status==="degraded");
+    lines.push("","🗺 FIRMS → DB → events → Telegram:");
+    for(const x of rows.slice(0,12)){
+      const icon=x.status==="degraded"?"⚠️":"✅";
+      lines.push(`${icon} ${x.oblast_name}: ${Number(x.api_detections??0)} → ${Number(x.db_matched??0)} → ${Number(x.distinct_events??0)} → ${Number(x.telegram_events??0)}${Number(x.missing_in_db??0)>0?" • missing "+Number(x.missing_in_db):""}`);
+    }
+  }
+  lines.push("","ℹ️ Geo Integrity сравнивает live FIRMS Area API за 24ч с ST_Covers(ADM1), detection_hash в БД, event aggregation и Telegram delivery. Baseline: 30 дней, 6-часовые UTC-слоты.");
+  return lines.join("\n").slice(0,3900);
+}
+
+
+async function renderAction(sb:any,action:string){if(action==="dossier")return await dossierText(sb);if(action==="satellite")return await satelliteText(sb);if(action==="integrity")return await integrityText(sb);if(action==="coverage")return await coverageText(sb);if(action==="search"||action==="search_help")return await searchText(sb,"");if(action==="search_geo")return ["📍 Ручной поиск по координатам","","Вариант 1:","/search coord=47.87557,37.67172 radius=10","","Вариант 2 — с фильтрами:","/search coord=47.87557,37.67172 radius=25 min_frp=20 platforms=2 limit=20","","История FIRMS до 365 дней:","/nearby 47.87557 37.67172","","Для /nearby допустимы разделители: пробел, запятая или точка с запятой.","Радиус /search: 0.1–500 км.","Передача геопозиции Telegram отключена."].join("\n");if(action==="analytics")return await analyticsText(sb,24);if(action==="osint")return await osintText(sb);if(action==="geo")return await geoText(sb);if(action==="ground")return await groundText(sb);const s=await snapshot(sb);if(action==="sources"){const base=sourcesText(s);const mtg=s.eumetsat_lsa_saf??{},msg=s.monitor_eumetsat??{},s3=s.monitor_sentinel3_slstr??{};const st=(e:any)=>e.status==="active"?"✅ активно":(e.status==="waiting_credentials"||e.status==="awaiting_credentials")?"🟡 ожидает учётные данные":"⚠️ "+String(e.status??"нет данных");return base+"\n\nMTG / FCI • LSA-509 ~1 км / 10 мин\nСтатус: "+st(mtg)+"\nПоследний доступный слот: "+String(mtg.latest_public_slot??"—")+"\nРежим: 2 слота или подтверждение полярным спутником\n\nMSG / SEVIRI • LSA-502 ~3 км / 15 мин\nСтатус: "+st(msg)+"\nПоследний доступный слот: "+String(msg.latest_public_slot??"—")+"\nРежим: подтверждающий источник\n\nSentinel-3 / SLSTR • SL_2_FRP\nСтатус: "+st(s3)+"\nПоследний продукт: "+String(s3.latest_product??"—")+"\nAcquisition: "+String(s3.latest_acquisition??"—")+"\nMWIR ~1 км: "+String(s3.mwir?.inserted??0)+" новых / "+String(s3.mwir?.duplicates??0)+" дублей\nSWIR ~500 м: "+String(s3.swir?.inserted??0)+" новых / "+String(s3.swir?.duplicates??0)+" дублей\nSWIR-only: "+String(s3.swir?.new_events_suppressed??0)+" подавлено до подтверждения"+"\n\nCAMS • атмосферный контекст ~11 км\nСтатус: "+st(s.monitor_cams??{})+"\nОбновлено событий: "+String(s.monitor_cams?.events_updated??0)+"\n\nSentinel-5P / TROPOMI • CO + AER_AI\nСтатус: "+st(s.monitor_sentinel5p??{})+"\nОбновлено событий: "+String(s.monitor_sentinel5p?.events_updated??0)+"\nПродукты: CO + UV Aerosol Index"+"\n\nStage 24 • Event Intelligence\nСтатус: "+st(s.monitor_intelligence??{})+"\nОбновлено событий: "+String(s.monitor_intelligence?.events_updated??0)+"\nМодель: 1/3/6 ч • кольца 10/25/50/100 км"+"\n\nStage 25 • OSINT Fusion\nСтатус: "+st(s.monitor_osint??{})+"\nПоследний цикл: "+ageText(s.monitor_osint?.last_success_run)+"\nИсточники: GDACS + NASA EONET + Copernicus EMS\nКандидатов: "+String(s.monitor_osint?.totals?.candidates??0)+" • сохранено: "+String(s.monitor_osint?.totals?.stored??0)+" • связанных: "+String(s.monitor_osint?.totals?.matched??0)+"\n\nStage 26 • Ground Environmental OSINT\nСтатус: "+st(s.monitor_ground_osint??{})+"\nПоследняя проверка: "+ageText(s.monitor_ground_osint?.last_check)+"\nSensor.Community: "+(s.monitor_ground_osint?.sensor_community?.error?"ошибка":"live")+" • запросов: "+String(s.monitor_ground_osint?.sensor_community?.queries??0)+" • readings: "+String(s.monitor_ground_osint?.sensor_community?.stored??0)+"\nOpenAQ: "+(s.monitor_ground_osint?.openaq?.configured?"configured":"ожидает API key")+"\nSaveEcoBot allow-list: "+String(s.monitor_ground_osint?.saveecobot?.registry_sources??0)+" источников"+"\n\nStage 27 • Event Geo OSINT\nСтатус: "+st(s.monitor_geo_osint??{})+"\nПоследняя проверка: "+ageText(s.monitor_geo_osint?.last_check)+"\nКэш hits: "+String(s.monitor_geo_osint?.cache_hits??0)+" • запросов: "+String(s.monitor_geo_osint?.queries_attempted??0)+" • refreshed: "+String(s.monitor_geo_osint?.refreshed??0)+" • failed: "+String(s.monitor_geo_osint?.failed??0)+"\nGeo source: Geofabrik Postpass (OSM/PostGIS), без GitHub Actions"+"\nStage 27.1 • Overpass probes: автоматические fallback отключены; Private.coffee timeout, VK Maps HTTP 504 из текущего Supabase Edge runtime"+"\nStage 27.2 • OpenInfraMap taxonomy: "+String(s.monitor_geo_osint?.infra_profile_version??"—")+" • событий с инфраструктурой: "+String(s.monitor_geo_osint?.events_with_infrastructure_total??0)+" • retained: "+String(s.monitor_geo_osint?.infrastructure_features_retained_total??0)+"\n\nStage 28 • Event OSINT Dossier\nСтатус: "+st(s.monitor_dossier??{})+"\nПоследний refresh: "+ageText(s.monitor_dossier?.last_success_run)+"\nОбновлено досье: "+String(s.monitor_dossier?.events_refreshed??0)+" • "+String(s.monitor_dossier?.schema_version??"—")+"\n\nStage 29 • Sentinel-2 Surface Evidence\nСтатус: "+st(s.monitor_satellite_evidence??{})+"\nПоследний цикл: "+ageText(s.monitor_satellite_evidence?.last_success_run)+"\nОбработано: "+String(s.monitor_satellite_evidence?.processed??0)+" • ready: "+String(s.monitor_satellite_evidence?.ready??0)+" • waiting-after: "+String(s.monitor_satellite_evidence?.waiting_after??0)+" • failed: "+String(s.monitor_satellite_evidence?.failed??0)+"\n\nStage 29.1 • Visual Surface Evidence\nСтатус: "+String(s.satellite_visual_policy?.status??"—")+" • "+String(s.satellite_visual_policy?.version??"—")+"\nПанели: BEFORE / AFTER / SWIR / dNBR • private cache"+"\n\nStage 30 • Event Evidence Report\nСтатус: "+String(s.event_report_policy?.status??"—")+" • "+String(s.event_report_policy?.version??"—")+"\nФорматы: HTML + JSON • private signed links • on-demand";}if(action==="archive")return archiveText(s);if(action==="events")return await latestEvents(sb);if(action==="event")return await eventDetailText(sb);return statusText(s)}
+function parseCoords(text:string){const s=text.trim().replace(/;/g," ");const m=s.match(/^\s*(-?\d{1,2}(?:\.\d+)?)\s*[,\s]\s*(-?\d{1,3}(?:\.\d+)?)\s*$/);if(!m)return null;const lat=Number(m[1]),lon=Number(m[2]);if(!Number.isFinite(lat)||!Number.isFinite(lon)||lat<-90||lat>90||lon<-180||lon>180)return null;return{lat,lon}}
+function sensorLabel(v:string){const u=v.toUpperCase();if(u.includes("VIIRS"))return "VIIRS";if(u.includes("MODIS"))return "MODIS";return v}
+async function nearbyText(sb:any,lat:number,lon:number){const {data,error}=await sb.rpc("find_hotspot_history_nearby",{p_lat:lat,p_lon:lon,p_radius_m:1000,p_days:365,p_limit:15});if(error)throw error;const {data:hist}=await sb.from("system_state").select("value").eq("key","history_backfill_365d").maybeSingle();const h=hist?.value??{};const rows=data??[];const head=[`📍 История FIRMS в радиусе 1 км`,`Точка: ${lat.toFixed(6)}, ${lon.toFixed(6)}`,`Период: до 365 дней`,`Найдено записей: ${rows.length}${rows.length>=15?" (показаны 15 последних)":""}`];if(!rows.length)head.push("","В доступной истории тепловых аномалий FIRMS рядом с этой точкой ничего не найдено.");else{const lines=rows.map((r:any,i:number)=>{const dist=Number(r.distance_m??0),frp=Number(r.max_frp),sensors=(r.sensors??[]).map((x:string)=>sensorLabel(String(x))).join("+")||"FIRMS",frpText=Number.isFinite(frp)?`${frp.toFixed(1)} МВт`:"—";return `${i+1}. ${r.day} • ${Math.round(dist)} м\n   ${Number(r.latitude).toFixed(5)}, ${Number(r.longitude).toFixed(5)} • ${sensors} • FRP max ${frpText} • детекций ${r.detection_count}`});head.push("",...lines)}if(!h.done){head.push("",`ℹ️ Годовой архив ещё заполняется: обработано ${h.processed_days??0} дней, текущая дата архива ${h.cursor??"—"}. Текущие live-детекции уже учитываются.`)}head.push("","FIRMS фиксирует тепловые аномалии; результат не является автоматическим подтверждением пожара.");return head.join("\n").slice(0,3900)}
+async function askLocation(token:string,chatId:string){await tg(token,"sendMessage",{chat_id:chatId,text:["📍 Ручной поиск по координатам","","Текущие события:","/search coord=50.4501,30.5234 radius=10","","История FIRMS до 365 дней:","/nearby 50.4501 30.5234","","Варианты координат для /nearby:","50.4501 30.5234","50.4501, 30.5234","50.4501; 30.5234","","Передача геопозиции Telegram отключена."].join("\n"),reply_markup:searchKeyboard})}
+
+
+async function clientUsers(sb:any){
+  const {data,error}=await sb.from("client_users")
+    .select("telegram_user_id,username,first_name,last_name,status,role,activated_at,last_seen_at,created_at")
+    .order("created_at",{ascending:false})
+    .limit(20);
+  if(error)throw error;
+  return data??[];
+}
+function clientDisplayName(u:any){
+  const full=[u.first_name,u.last_name].filter(Boolean).join(" ").trim();
+  if(full)return full;
+  if(u.username)return "@"+String(u.username).replace(/^@/,"");
+  return "ID "+String(u.telegram_user_id);
+}
+function clientUsersText(rows:any[]){
+  const active=rows.filter(x=>x.status==="active").length;
+  const blocked=rows.filter(x=>x.status==="blocked").length;
+  const pending=rows.filter(x=>x.status==="pending").length;
+  const lines=rows.map((u:any,i:number)=>{
+    const icon=u.status==="active"?"✅":u.status==="blocked"?"⛔":"⏳";
+    const user=u.username?"@"+String(u.username).replace(/^@/,""):String(u.telegram_user_id);
+    return `${i+1}. ${icon} ${clientDisplayName(u)}\n   ${user} • ID ${u.telegram_user_id} • ${u.role??"premium"}\n   последний вход: ${ageText(u.last_seen_at)}`;
+  });
   return [
-    `🩺 <b>Core Doctor</b> • ${esc(String(data?.status??"unknown").toUpperCase())}`,
-    `PASS ${Number(s.pass??0)} • WARN ${Number(s.warn??0)} • FAIL ${Number(s.fail??0)}`,
+    "👥 Клиенты гостевого бота",
     "",
-    ...(bad.length?bad.slice(0,12).map((x:any)=>`${x.status==="fail"?"❌":"⚠️"} ${esc(x.message)}`):["✅ No database warnings."]),
+    `Всего: ${rows.length} • active ${active} • blocked ${blocked} • pending ${pending}`,
     "",
-    "For external FIRMS/Telegram credential checks run scripts/validate.*."
+    ...(lines.length?lines:["Пользователей пока нет."]),
+    "",
+    "Invite: одноразовый, Premium, срок действия 24 часа."
+  ].join("\n").slice(0,3900);
+}
+function clientUsersKeyboard(_rows:any[]){
+  return {inline_keyboard:[
+    [{text:"➕ Создать invite",callback_data:"admin:clientinvite"}],
+    [{text:"👤 Управление пользователями",callback_data:"admin:clientmanage"}],
+    [{text:"🔄 Обновить список",callback_data:"admin:clients"}],
+    [{text:"⬅️ В панель",callback_data:"admin:status"}]
+  ]};
+}
+function clientManageKeyboard(rows:any[]){
+  const userButtons=rows.slice(0,20).map((u:any)=>{
+    const id=String(u.telegram_user_id);
+    const icon=u.status==="active"?"✅":u.status==="blocked"?"⛔":"⏳";
+    const label=(u.username?"@"+String(u.username).replace(/^@/,""):clientDisplayName(u)).slice(0,28);
+    return [{text:icon+" "+label,callback_data:"admin:clientcard:"+id}];
+  });
+  return {inline_keyboard:[
+    ...userButtons,
+    [{text:"⬅️ К списку клиентов",callback_data:"admin:clients"}]
+  ]};
+}
+function clientCardText(u:any){
+  const user=u.username?"@"+String(u.username).replace(/^@/,""):"—";
+  const status=u.status==="active"?"✅ active":u.status==="blocked"?"⛔ blocked":"⏳ pending";
+  return [
+    "👤 Пользователь",
+    "",
+    `Имя: ${clientDisplayName(u)}`,
+    `Username: ${user}`,
+    `Telegram ID: ${u.telegram_user_id}`,
+    `Роль: ${u.role??"premium"}`,
+    `Статус: ${status}`,
+    `Создан: ${ageText(u.created_at)}`,
+    `Активирован: ${u.activated_at?ageText(u.activated_at):"—"}`,
+    `Последний вход: ${ageText(u.last_seen_at)}`
   ].join("\n");
 }
-const help=`<b>Admin commands</b>
+function clientCardKeyboard(u:any){
+  const id=String(u.telegram_user_id);
+  const action=u.status==="blocked"?"unblock":"block";
+  const label=u.status==="blocked"?"✅ Разблокировать":"⛔ Заблокировать";
+  return {inline_keyboard:[
+    [{text:label,callback_data:"admin:client:"+action+":"+id}],
+    [{text:"⬅️ К пользователям",callback_data:"admin:clientmanage"}]
+  ]};
+}
+async function createClientInvite(sb:any){
+  const code="GW-"+crypto.randomUUID().replace(/-/g,"");
+  const expiresAt=new Date(Date.now()+24*3600_000).toISOString();
+  const {data,error}=await sb.rpc("firewatch_client_create_invite",{
+    p_code:code,
+    p_role:"premium",
+    p_max_uses:1,
+    p_expires_at:expiresAt,
+    p_label:"admin-bot"
+  });
+  if(error)throw error;
+  return {code,expiresAt,result:data};
+}
+async function setClientStatus(sb:any,id:string,status:"active"|"blocked"){
+  const n=Number(id);
+  if(!Number.isSafeInteger(n)||n<=0)throw new Error("invalid Telegram user id");
+  const {data,error}=await sb.from("client_users")
+    .update({status,updated_at:new Date().toISOString()})
+    .eq("telegram_user_id",n)
+    .select("telegram_user_id,username,first_name,last_name,status")
+    .maybeSingle();
+  if(error)throw error;
+  if(!data)throw new Error("client user not found");
+  await sb.from("client_audit_log").insert({
+    telegram_user_id:n,
+    action:"admin_status_change",
+    result:status,
+    meta:{source:"firewatch-admin"}
+  });
+  return data;
+}
 
-<code>/panel</code>
-<code>/dashboard</code>
-<code>/status</code>
-<code>/coverage</code>
-<code>/events</code>
-<code>/event [ID]</code>
-<code>/analytics [hours]</code>
-<code>/search id=... region=... status=... source=... min_frp=... min_obs=... min_platforms=... sent=true limit=20</code>
-<code>/search coord=50.45,30.52 radius=10</code>
-<code>/doctor</code>
+async function processAdminUpdate(sb:any,token:string,adminId:string,u:any){
+  if(u?.callback_query){
+    const q=u.callback_query;
+    if(String(q?.message?.chat?.id)!==adminId)return false;
+    const action=String(q.data??"").replace("admin:","");
+    if(action==="clients"){
+      try{await tg(token,"answerCallbackQuery",{callback_query_id:q.id})}catch{}
+      const rows=await clientUsers(sb);
+      const text=clientUsersText(rows);
+      const kb=clientUsersKeyboard(rows);
+      try{await tg(token,"editMessageText",{chat_id:adminId,message_id:q.message.message_id,text,reply_markup:kb})}
+      catch{await tg(token,"sendMessage",{chat_id:adminId,text,reply_markup:kb})}
+      return true;
+    }
+    if(action==="clientinvite"){
+      try{await tg(token,"answerCallbackQuery",{callback_query_id:q.id})}catch{}
+      const inv=await createClientInvite(sb);
+      await tg(token,"sendMessage",{
+        chat_id:adminId,
+        text:`🎟 Premium invite\n\n${inv.code}\n\nОдноразовый • действует 24 часа.\nПередайте код пользователю гостевого бота.`
+      });
+      const rows=await clientUsers(sb);
+      await tg(token,"sendMessage",{chat_id:adminId,text:clientUsersText(rows),reply_markup:clientUsersKeyboard(rows)});
+      return true;
+    }
+    if(action==="clientmanage"){
+      try{await tg(token,"answerCallbackQuery",{callback_query_id:q.id})}catch{}
+      const rows=await clientUsers(sb);
+      const text="👤 Управление пользователями\n\nВыберите пользователя:";
+      const kb=clientManageKeyboard(rows);
+      try{await tg(token,"editMessageText",{chat_id:adminId,message_id:q.message.message_id,text,reply_markup:kb})}
+      catch{await tg(token,"sendMessage",{chat_id:adminId,text,reply_markup:kb})}
+      return true;
+    }
+    if(action.startsWith("clientcard:")){
+      try{await tg(token,"answerCallbackQuery",{callback_query_id:q.id})}catch{}
+      const id=action.split(":")[1];
+      const rows=await clientUsers(sb);
+      const user=rows.find((x:any)=>String(x.telegram_user_id)===id);
+      if(!user)throw new Error("client user not found");
+      try{await tg(token,"editMessageText",{chat_id:adminId,message_id:q.message.message_id,text:clientCardText(user),reply_markup:clientCardKeyboard(user)})}
+      catch{await tg(token,"sendMessage",{chat_id:adminId,text:clientCardText(user),reply_markup:clientCardKeyboard(user)})}
+      return true;
+    }
+    if(action.startsWith("client:block:")||action.startsWith("client:unblock:")){
+      try{await tg(token,"answerCallbackQuery",{callback_query_id:q.id})}catch{}
+      const parts=action.split(":");
+      const newStatus=parts[1]==="block"?"blocked":"active";
+      await setClientStatus(sb,parts[2],newStatus);
+      const rows=await clientUsers(sb);
+      const user=rows.find((x:any)=>String(x.telegram_user_id)===parts[2]);
+      if(!user)throw new Error("client user not found");
+      try{await tg(token,"editMessageText",{chat_id:adminId,message_id:q.message.message_id,text:clientCardText(user),reply_markup:clientCardKeyboard(user)})}
+      catch{await tg(token,"sendMessage",{chat_id:adminId,text:clientCardText(user),reply_markup:clientCardKeyboard(user)})}
+      return true;
+    }
+    try{await tg(token,"answerCallbackQuery",{callback_query_id:q.id})}catch{}
+    if(action==="dashboard"){
+      const link=await dashboardUrl(sb);
+      await tg(token,"sendMessage",{chat_id:adminId,text:"🌐 GeoWatch Web Dashboard\n\nСсылка действует 4 часа. Доступ read-only.",reply_markup:{inline_keyboard:[[{text:"🌐 Открыть Dashboard",url:link}],[{text:"🔄 Новая ссылка",callback_data:"admin:dashboard"}]]}});
+      return true;
+    }
+    if(action==="nearby"){await askLocation(token,adminId);return true}
+    if(action==="search"||action==="search_geo"||action==="search_help"){
+      const text=await renderAction(sb,action);
+      try{await tg(token,"editMessageText",{chat_id:adminId,message_id:q.message.message_id,text,reply_markup:searchKeyboard})}
+      catch{await tg(token,"sendMessage",{chat_id:adminId,text,reply_markup:searchKeyboard})}
+      return true;
+    }
+    if(action==="report"){await sendEventReport(sb,token,adminId);return true}
+    if(action==="satellite"||action==="dossier")await ensureSatelliteEvidence(sb);
+    const text=await renderAction(sb,action);
+    try{await tg(token,"editMessageText",{chat_id:adminId,message_id:q.message.message_id,text,reply_markup:panelKeyboard})}
+    catch{await tg(token,"sendMessage",{chat_id:adminId,text,reply_markup:panelKeyboard})}
+    if(action==="satellite")await sendSatelliteVisual(sb,token,adminId);
+    return true;
+  }
 
-Radius: 0.1–500 km. Default 10 km.`;
+  const m=u?.message;
+  if(!m||String(m.chat?.id)!==adminId)return false;
 
-Deno.serve(async(req)=>{
+  if(m.location){
+    await tg(token,"sendMessage",{chat_id:adminId,text:["📍 Передача геопозиции отключена.","","Используйте ручной поиск:","/search coord=50.4501,30.5234 radius=10","","или историю:","/nearby 50.4501 30.5234"].join("\n"),reply_markup:searchKeyboard});
+    return true;
+  }
+
+  const raw=String(m.text??"").trim();
+  const coords=parseCoords(raw);
+  if(coords){
+    const text=await nearbyText(sb,coords.lat,coords.lon);
+    await tg(token,"sendMessage",{chat_id:adminId,text,reply_markup:panelKeyboard});
+    return true;
+  }
+
+  const low=raw.toLowerCase();
+  if(low==="/clients"){
+    const rows=await clientUsers(sb);
+    await tg(token,"sendMessage",{chat_id:adminId,text:clientUsersText(rows),reply_markup:clientUsersKeyboard(rows)});
+    return true;
+  }
+  if(low==="/clientinvite"){
+    const inv=await createClientInvite(sb);
+    await tg(token,"sendMessage",{
+      chat_id:adminId,
+      text:`🎟 Premium invite\n\n${inv.code}\n\nОдноразовый • действует 24 часа.`,
+      reply_markup:panelKeyboard
+    });
+    return true;
+  }
+    if(low.startsWith("/report")){
+    const arg=raw.split(/\s+/).slice(1).join(" ").trim();
+    await sendEventReport(sb,token,adminId,arg);
+    return true;
+  }
+  if(low.startsWith("/integrity")){
+    await tg(token,"sendMessage",{chat_id:adminId,text:await integrityText(sb),reply_markup:panelKeyboard});
+    return true;
+  }
+  if(low.startsWith("/coverage")){
+    await tg(token,"sendMessage",{chat_id:adminId,text:await coverageText(sb),reply_markup:panelKeyboard});
+    return true;
+  }
+  if(low.startsWith("/search")){
+    const arg=raw.split(/\s+/).slice(1).join(" ").trim();
+    await tg(token,"sendMessage",{chat_id:adminId,text:await searchText(sb,arg),reply_markup:searchKeyboard});
+    return true;
+  }
+  if(low.startsWith("/analytics")){
+    const arg=raw.split(/\s+/)[1]??"24";
+    await tg(token,"sendMessage",{chat_id:adminId,text:await analyticsText(sb,Number(arg)),reply_markup:panelKeyboard});
+    return true;
+  }
+  if(low.startsWith("/dossier")){
+    const arg=raw.split(/\s+/).slice(1).join(" ").trim();
+    await ensureSatelliteEvidence(sb,arg);
+    await tg(token,"sendMessage",{chat_id:adminId,text:await dossierText(sb,arg),reply_markup:panelKeyboard});
+    return true;
+  }
+  if(low.startsWith("/satellite")){
+    const arg=raw.split(/\s+/).slice(1).join(" ").trim();
+    await ensureSatelliteEvidence(sb,arg);
+    await tg(token,"sendMessage",{chat_id:adminId,text:await satelliteText(sb,arg),reply_markup:panelKeyboard});
+    await sendSatelliteVisual(sb,token,adminId,arg);
+    return true;
+  }
+  if(low.startsWith("/event")){
+    const arg=raw.split(/\s+/).slice(1).join(" ").trim();
+    await tg(token,"sendMessage",{chat_id:adminId,text:await eventDetailText(sb,arg),reply_markup:panelKeyboard});
+    return true;
+  }
+  if(low.startsWith("/osint")){
+    const arg=raw.split(/\s+/).slice(1).join(" ").trim();
+    await tg(token,"sendMessage",{chat_id:adminId,text:await osintText(sb,arg),reply_markup:panelKeyboard});
+    return true;
+  }
+  if(low.startsWith("/ground")){
+    const arg=raw.split(/\s+/).slice(1).join(" ").trim();
+    await tg(token,"sendMessage",{chat_id:adminId,text:await groundText(sb,arg),reply_markup:panelKeyboard});
+    return true;
+  }
+  if(low.startsWith("/geo")){
+    const arg=raw.split(/\s+/).slice(1).join(" ").trim();
+    await tg(token,"sendMessage",{chat_id:adminId,text:await geoText(sb,arg),reply_markup:panelKeyboard});
+    return true;
+  }
+
+  const cmd=low.split("@")[0];
+  if(cmd==="/nearby"){await askLocation(token,adminId);return true}
+  let action="status";
+  if(cmd==="/sources")action="sources";
+  else if(cmd==="/events")action="events";
+  else if(cmd==="/archive")action="archive";
+  else if(cmd==="/start"||cmd==="/panel")action="status";
+  else if(cmd!=="/status")return false;
+
+  await tg(token,"sendMessage",{chat_id:adminId,text:await renderAction(sb,action),reply_markup:panelKeyboard});
+  return true;
+}
+
+Deno.serve(async(req:Request)=>{
   if(req.method!=="POST")return json({ok:false,error:"POST required"},405);
+
+  const url=Deno.env.get("SUPABASE_URL");
+  const key=Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
   const token=Deno.env.get("TELEGRAM_BOT_TOKEN");
-  const adminId=Deno.env.get("TELEGRAM_ADMIN_CHAT_ID");
-  const webhookSecret=Deno.env.get("TELEGRAM_ADMIN_WEBHOOK_SECRET");
-  const url=Deno.env.get("SUPABASE_URL"),serviceKey=Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
-  if(!token||!adminId||!webhookSecret||!url||!serviceKey)return json({ok:false,error:"Admin environment is incomplete"},500);
+  if(!url||!key||!token)return json({ok:false,error:"missing env"},500);
 
-  const incoming=req.headers.get("x-telegram-bot-api-secret-token")??"";
-  if(incoming!==webhookSecret)return json({ok:false,error:"Unauthorized"},401);
+  const sb=createClient(url,key,{auth:{persistSession:false}});
+  const cronSecret=req.headers.get("x-cron-secret")??"";
+  const telegramSecret=req.headers.get("x-telegram-bot-api-secret-token")??"";
+  let mode:"cron"|"webhook";
 
-  const sb=createClient(url,serviceKey,{auth:{persistSession:false}});
-  const update=await req.json().catch(()=>null);
-  if(!update)return json({ok:true});
-
-  const msg=update.message??update.callback_query?.message;
-  const chatId=String(msg?.chat?.id??"");
-  if(chatId!==String(adminId)){
-    if(update.callback_query?.id)try{await tg(token,"answerCallbackQuery",{callback_query_id:update.callback_query.id,text:"Not authorized",show_alert:true})}catch{}
-    return json({ok:true,ignored:"not admin"});
+  if(cronSecret){
+    const {data:auth,error}=await sb.rpc("verify_firewatch_cron_secret",{p_secret:cronSecret});
+    if(error||auth!==true)return json({ok:false,error:"unauthorized"},401);
+    mode="cron";
+  }else if(telegramSecret){
+    const {data:expected,error}=await sb.rpc("firewatch_optional_vault_secret",{p_name:"telegram_admin_webhook_secret"});
+    if(error||!expected||String(expected)!==telegramSecret)return json({ok:false,error:"unauthorized"},401);
+    mode="webhook";
+  }else{
+    return json({ok:false,error:"unauthorized"},401);
   }
 
   try{
-    if(update.callback_query?.id)try{await tg(token,"answerCallbackQuery",{callback_query_id:update.callback_query.id})}catch{}
-    const cb=String(update.callback_query?.data??"");
-    let text=String(update.message?.text??"").trim();
+    const [{data:pairRow},{data:stateRow}]=await Promise.all([
+      sb.from("system_state").select("value").eq("key","watchdog_pairing").single(),
+      sb.from("system_state").select("value").eq("key","admin_bot_state").maybeSingle()
+    ]);
+    const adminId=pairRow?.value?.admin_chat_id?String(pairRow.value.admin_chat_id):null;
+    if(!adminId)return json({ok:true,paired:false,mode});
 
-    if(cb){
-      if(cb==="a:dashboard"){
-        const u=await dashboardUrl(sb);
-        await send(token,chatId,"🌐 <b>Dashboard</b>\nLink is valid for 4 hours.",{inline_keyboard:[[{text:"Open Dashboard",url:u}],[{text:"⬅️ Admin panel",callback_data:"a:status"}]]});
-        return json({ok:true});
+    let state=stateRow?.value??{};
+
+    if(!state.commands_v14){
+      await tg(token,"setMyCommands",{commands:[
+        {command:"start",description:"Открыть админ-панель"},
+        {command:"status",description:"Статус мониторинга"},
+        {command:"panel",description:"Админ-панель"},
+        {command:"event",description:"Детали последнего/указанного события"},
+        {command:"dossier",description:"Полное OSINT-досье события"},
+        {command:"report",description:"HTML/JSON Evidence Report события"},
+        {command:"integrity",description:"Аудит пропусков и доставки"},
+        {command:"coverage",description:"Аудит покрытия спутниковых источников"},
+        {command:"search",description:"Поиск событий по фильтрам"},
+        {command:"analytics",description:"Сводная аналитика 24/168/720 ч"},
+        {command:"satellite",description:"Sentinel-2 до/после и NBR/NDVI"},
+        {command:"osint",description:"Внешний OSINT по событию"},
+        {command:"geo",description:"Гео- и инфраструктурный OSINT"},
+        {command:"ground",description:"Наземные экологические датчики"},
+        {command:"nearby",description:"История FIRMS в радиусе 1 км"},
+        {command:"sources",description:"Состояние спутников и OSINT"},
+        {command:"events",description:"Последние события"},
+        {command:"archive",description:"Архив и база"}
+      ]});
+      state.commands_configured=true;
+      state.commands_v9=true;
+      state.commands_v10=true;
+      state.commands_v11=true;
+      state.commands_v12=true;
+      state.commands_v13=true;
+      state.commands_v14=true;
+      state.commands_v15=true;
+    }
+
+    if(mode==="cron"){
+      const {data:webhookSecret,error:we}=await sb.rpc("firewatch_optional_vault_secret",{p_name:"telegram_admin_webhook_secret"});
+      if(we||!webhookSecret)throw new Error("telegram webhook secret unavailable");
+
+      const webhookUrl=`${url}/functions/v1/firewatch-admin`;
+      const lastCheck=Date.parse(String(state.webhook_last_check??""));
+      const checkDue=!Number.isFinite(lastCheck)||Date.now()-lastCheck>6*3600_000||!state.webhook_enabled;
+
+      if(checkDue){
+        let info:any=await tg(token,"getWebhookInfo",{});
+        if(String(info?.url??"")!==webhookUrl){
+          await tg(token,"setWebhook",{
+            url:webhookUrl,
+            secret_token:String(webhookSecret),
+            allowed_updates:["message","callback_query"],
+            drop_pending_updates:false,
+            max_connections:10
+          });
+          info=await tg(token,"getWebhookInfo",{});
+        }
+
+        state.delivery_mode="webhook";
+        state.polling_disabled=true;
+        state.webhook_enabled=String(info?.url??"")===webhookUrl;
+        state.webhook_url=String(info?.url??"");
+        state.webhook_last_check=new Date().toISOString();
+        state.webhook_pending_update_count=Number(info?.pending_update_count??0);
+        state.webhook_last_error_observed=info?.last_error_message??null;
+        state.webhook_last_error=Number(info?.pending_update_count??0)>0?(info?.last_error_message??null):null;
+        state.webhook_max_connections=Number(info?.max_connections??0);
       }
-      if(cb==="a:status")text="/status";
-      else if(cb==="a:coverage")text="/coverage";
-      else if(cb==="a:events")text="/events";
-      else if(cb==="a:analytics24")text="/analytics 24";
-      else if(cb==="a:doctor")text="/doctor";
-      else if(cb==="a:searchgeo"){await send(token,chatId,"Use: <code>/search coord=50.45,30.52 radius=10</code>",panel);return json({ok:true})}
-      else if(cb==="a:searchhelp"){await send(token,chatId,help,panel);return json({ok:true})}
+
+      state.last_health_check=new Date().toISOString();
+      await sb.from("system_state").upsert({key:"admin_bot_state",value:state,updated_at:new Date().toISOString()});
+      return json({
+        ok:true,paired:true,mode:"webhook-health",
+        webhook_enabled:Boolean(state.webhook_enabled),
+        pending_updates:Number(state.webhook_pending_update_count??0),
+        last_error:state.webhook_last_error??null
+      });
     }
 
-    if(!text||text==="/start"||text==="/panel"||text==="/help"){await send(token,chatId,help,panel);return json({ok:true})}
-    if(text.startsWith("/dashboard")){
-      const u=await dashboardUrl(sb);
-      await send(token,chatId,"🌐 <b>Dashboard</b>\nLink is valid for 4 hours.",{inline_keyboard:[[{text:"Open Dashboard",url:u}],[{text:"⬅️ Admin panel",callback_data:"a:status"}]]});
-    }
-    else if(text.startsWith("/status"))await send(token,chatId,await statusText(sb),panel);
-    else if(text.startsWith("/coverage"))await send(token,chatId,await coverageText(sb),panel);
-    else if(text.startsWith("/events"))await send(token,chatId,await eventsText(sb),panel);
-    else if(text.startsWith("/event"))await send(token,chatId,await eventText(sb,text.split(/\s+/)[1]),panel);
-    else if(text.startsWith("/analytics")){
-      const h=Math.max(1,Math.min(8760,Number(text.split(/\s+/)[1]??24)||24));
-      await sendChunks(token,chatId,await analyticsParts(sb,h));await send(token,chatId,"Admin panel",panel);
-    }else if(text.startsWith("/search"))await send(token,chatId,await searchText(sb,text),panel);
-    else if(text.startsWith("/doctor"))await send(token,chatId,await doctorText(sb),panel);
-    else await send(token,chatId,help,panel);
-
-    return json({ok:true});
+    const update=await req.json();
+    const started=performance.now();
+    const processed=await processAdminUpdate(sb,token,adminId,update);
+    const processingMs=Math.round(performance.now()-started);
+    state.delivery_mode="webhook";
+    state.polling_disabled=true;
+    state.webhook_enabled=true;
+    state.last_webhook_update=new Date().toISOString();
+    state.last_webhook_update_id=Number(update?.update_id??0);
+    state.last_webhook_processing_ms=processingMs;
+    state.webhook_last_error=null;
+    await sb.from("system_state").upsert({key:"admin_bot_state",value:state,updated_at:new Date().toISOString()});
+    return json({ok:true,paired:true,mode:"webhook",processed:processed?1:0,processing_ms:processingMs});
   }catch(e){
-    const m=e instanceof Error?e.message:String(e);
-    try{await send(token,chatId,`❌ <b>Admin error</b>\n${esc(m).slice(0,3000)}`,panel)}catch{}
-    return json({ok:false,error:m},500);
+    const msg=e instanceof Error?e.message:String(e);
+    console.error("firewatch-admin error:",msg);
+    return json({ok:false,error:msg},mode==="webhook"?200:502);
   }
 });
+
