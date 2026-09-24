@@ -695,46 +695,29 @@ async function regionalSearchRequest(payload:any){
   const u=Deno.env.get("SUPABASE_URL"),k=Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");if(!u||!k)throw new Error("missing Supabase env");
   const r=await fetch(u+"/functions/v1/firewatch-regional-search",{method:"POST",headers:{"content-type":"application/json","authorization":"Bearer "+k},body:JSON.stringify(payload),signal:AbortSignal.timeout(90000)});
   const t=await r.text();let d:any;try{d=JSON.parse(t)}catch{throw new Error("Regional Search invalid response")}
-  if(!r.ok||!d?.ok)throw new Error(String(d?.error??("HTTP "+r.status)));return d;
+  if(!r.ok||!d?.ok){let m=String(d?.error??("HTTP "+r.status));if(Array.isArray(d?.suggestions)&&d.suggestions.length)m+="\nВарианты: "+d.suggestions.map((x:any)=>x.label??x.key).join(" / ");throw new Error(m)}return d;
 }
 function parseRegionalArgs(v:string){const query=String(v??"").trim();return query?{query}:null}
 function regionalCsv(d:any){const cols=["No","Name","Brand","Operator","Settlement","Address","Latitude","Longitude","Sources","Source count","Resolution status","Confidence","Wikidata QID"],cell=(v:any)=>{const s=String(v??"");return /[",\n\r;]/.test(s)?'"'+s.replace(/"/g,'""')+'"':s};const rows=(Array.isArray(d?.objects)?d.objects:[]).map((x:any,i:number)=>[i+1,x.canonical_name,x.brand,x.operator,x.settlement,x.address,Number(x.latitude).toFixed(6),Number(x.longitude).toFixed(6),(Array.isArray(x.sources)?x.sources:[]).map((s:any)=>s.source+":"+s.source_id).join(" | "),x.source_count,x.resolution_status,x.resolution_confidence,x.wikidata_qid]);return "\uFEFF"+[cols,...rows].map(r=>r.map(cell).join(",")).join("\r\n")}
-function regionalSearchText(d:any){const s=d?.summary??{},xs:any[]=Array.isArray(d?.objects)?d.objects:[];const lines=["🏭 REGIONAL OBJECT SEARCH",String(d?.oblast?.name_uk??d?.oblast_name??"—")+" • "+String(d?.category_label??d?.category_key??"—"),"Найдено: "+Number(s.resolved_objects??xs.length)+" • multi-source "+Number(s.multi_source??0)+" • status "+String(d?.status??"—")+(d?.cached?" • cache":" • fresh"),"Источники: OSM "+Number(s.osm_objects??0)+" • Overture "+Number(s.overture_objects??0)+" • Wikidata "+Number(s.wikidata_objects??0),""];xs.slice(0,20).forEach((x:any,i:number)=>lines.push((i+1)+". "+String(x.canonical_name??"—")+(x.brand&&x.brand!==x.canonical_name?" • "+String(x.brand):"")+(x.settlement?" • "+String(x.settlement):"")+(x.address?" • "+String(x.address):"")+"\n   "+Number(x.latitude).toFixed(5)+", "+Number(x.longitude).toFixed(5)+" • "+Number(x.source_count??0)+" src • "+String(x.resolution_status??"—")));if(xs.length>20)lines.push("","Показаны первые 20 из "+xs.length+". Полный список: /objects_csv <область> <категория>");if(Boolean(s.truncated))lines.push("","⚠️ Достигнут лимит источника/выдачи.");if(Array.isArray(d?.errors)&&d.errors.length)lines.push("","⚠️ Partial: "+d.errors.slice(0,3).join(" | "));lines.push("","Полнота зависит от картографирования публичных источников.");return lines.join("\n").slice(0,3900)}
-function areaReportText(d:any){
-  const r=d?.report??{},inf=r.infrastructure??{},sum=inf.summary??{},counts=sum.by_category??{},gh=r.ghsl??{},ent=r.entities??{},es=ent.summary??{},reg=r.official_registry??{},os=r.osint??{},cov=r.coverage??{};
-  const labels:any={energy:"энергетика",industrial:"промышленность",government:"административные",emergency:"экстренные службы",healthcare:"медицина",education:"образование",transport:"транспорт",logistics:"логистика",water:"вода",telecom:"телеком",commercial:"коммерция",residential:"жилые",cultural:"культура",public_service:"общественные службы",storage:"хранение"};
-  const order=["energy","industrial","government","emergency","healthcare","education","transport","logistics","water","telecom","commercial","residential","cultural","public_service","storage"];
-  const lines=[
-    "🧭 AREA OSINT REPORT",
-    "Центр: "+Number(d.latitude).toFixed(5)+", "+Number(d.longitude).toFixed(5)+" • радиус "+Number(d.radius_m)+" м"+(d.event_id?" • event #"+String(d.event_id).slice(0,8):""),
-    "Coverage: "+Number(cov.active??0)+"/"+Number(cov.total??0)+" sources • status "+String(d.status??"—"),
-    "",
-    "🏗 Инфраструктура"
-  ];
-  for(const k of order)if(Number(counts[k]??0)>0)lines.push("• "+(labels[k]??k)+": "+Number(counts[k]));
-  const b=inf.buildings??{};lines.push("• building footprints: "+Number(b.building_count??0)+" • non-residential tagged "+Number(b.nonresidential_tagged_count??0));
-  if(r.ghsl){
-    lines.push("","👥 GHSL exposure • epoch "+String(gh.epoch??2025));
-    lines.push("• population: 1 км ~"+Math.round(Number(gh.population_1km??0)).toLocaleString("ru-RU")+" • 5 км ~"+Math.round(Number(gh.population_5km??0)).toLocaleString("ru-RU")+" • 10 км ~"+Math.round(Number(gh.population_10km??0)).toLocaleString("ru-RU"));
-    lines.push("• built fraction: 1 км "+Number(gh.built_fraction_1km_pct??0).toFixed(2)+"% • 5 км "+Number(gh.built_fraction_5km_pct??0).toFixed(2)+"% • 10 км "+Number(gh.built_fraction_10km_pct??0).toFixed(2)+"%");
-  }
-  lines.push("","🔗 Entity graph");
-  lines.push("• entities "+Number(es.entities??0)+" • multi-source "+Number(es.multi_source??0)+" • Wikidata "+Number(es.wikidata_entities??0)+" • review "+Number(es.pending_proposals??0));
-  const tops:any[]=Array.isArray(ent.top)?ent.top:[];
-  for(const x of tops.slice(0,6))lines.push("• #"+String(x.id??"").slice(0,8)+" "+String(x.canonical_name??"—")+" • "+String(x.category??"—")+" • "+Number(x.source_count??0)+" src"+(x.wikidata_qid?" • "+String(x.wikidata_qid):""));
-  lines.push("","🏛 Official / registry");
-  lines.push("• hits "+Number(reg.hit_count??0)+" • confirmed "+Number(reg.confirmed??0)+" • probable "+Number(reg.probable??0));
-  const rh:any[]=Array.isArray(reg.hits)?reg.hits:[];
-  for(const x of rh.slice(0,4))lines.push("• "+String(x.entity_name??"—")+" • "+String(x.source_key??"—")+" • "+Number(x.confidence??0)+"/100");
-  lines.push("","📰 OSINT по району");
-  lines.push("• публикаций/сигналов: "+Number(os.count??0)+" • providers "+(Array.isArray(os.providers)?os.providers.length:0));
-  const oi:any[]=Array.isArray(os.items)?os.items:[];
-  for(const x of oi.slice(0,4))lines.push("• ["+String(x.source??"source")+"] "+String(x.title??"").replace(/\s+/g," ").slice(0,160)+(x.distance_m!=null?" • "+Math.round(Number(x.distance_m))+" м":""));
-  if(Array.isArray(d.errors)&&d.errors.length)lines.push("","⚠️ Partial: "+d.errors.slice(0,3).join(" | "));
-  lines.push("","/entity <ID|QID> — карточка объекта","/registry <ID|QID> — официальный/реестровый контекст","Пространственная близость не доказывает причинную связь или operational significance.");
+function regionalSearchText(d:any){
+  const s=d?.summary??{},res=d?.resolution??s?.resolution??{},xs:any[]=Array.isArray(d?.objects)?d.objects:[];
+  const mode=res?.mode==="generic"?"generic OSM":res?.mode==="semantic_hint"?"OSM semantic":res?.mode==="fuzzy"?"fuzzy → "+String(d?.category_label??d?.category_key??""):res?.mode==="qualified"?"category + filter":"category";
+  const lines=["🏭 REGIONAL OBJECT SEARCH",String(d?.oblast?.name_uk??d?.oblast_name??"—")+" • "+String(d?.category_label??d?.category_key??"—"),"Найдено: "+Number(s.resolved_objects??xs.length)+" • multi-source "+Number(s.multi_source??0)+" • status "+String(d?.status??"—")+(d?.cached?" • cache":" • fresh"),"Режим: "+mode+(res?.input?" • запрос: "+String(res.input):""),"Источники: OSM "+Number(s.osm_objects??0)+" • Overture "+Number(s.overture_objects??0)+" • Wikidata "+Number(s.wikidata_objects??0),""];
+  xs.slice(0,20).forEach((x:any,i:number)=>lines.push((i+1)+". "+String(x.canonical_name??"—")+(x.brand&&x.brand!==x.canonical_name?" • "+String(x.brand):"")+(x.settlement?" • "+String(x.settlement):"")+(x.address?" • "+String(x.address):"")+"\n   "+Number(x.latitude).toFixed(5)+", "+Number(x.longitude).toFixed(5)+" • "+Number(x.source_count??0)+" src • "+String(x.resolution_status??"—")));
+  if(xs.length>20)lines.push("","Показаны первые 20 из "+xs.length+". Полный список: /objects_csv <область> <объект>");
+  if(!xs.length)lines.push("","Совпадений в подключённых публичных данных не найдено.");
+  if(Boolean(s.truncated))lines.push("","⚠️ Достигнут лимит источника/выдачи.");
+  if(Array.isArray(d?.errors)&&d.errors.length)lines.push("","⚠️ Partial: "+d.errors.slice(0,3).join(" | "));
+  if(res?.mode==="generic")lines.push("","ℹ️ Свободный поиск: совпадение по безопасному набору публичных OSM name/tag полей; формулировка влияет на полноту.");
+  lines.push("","Полнота зависит от картографирования публичных источников.");
   return lines.join("\n").slice(0,3900);
 }
-function regionalErrorText(e:any){const m=e instanceof Error?e.message:String(e);if(/oblast not found/i.test(m))return "⚠️ Область не распознана.\n\nПример: /objects Киевская область АЗС\nТакже поддерживаются украинские и английские названия.";if(/unsupported category/i.test(m))return "⚠️ Категория не поддерживается.\n\nДоступно: АЗС, подстанции/ПС, электростанции/ТЭЦ/АЭС, резервуары/ёмкости, больницы, аптеки, школы, пожарные части, полиция, энергетика, промышленность, склады, супермаркеты, телеком, транспорт.";return "⚠️ Региональный поиск временно не выполнен.\n"+m.slice(0,240)}
+function regionalErrorText(e:any){
+  const m=e instanceof Error?e.message:String(e);
+  if(/oblast not found/i.test(m))return "⚠️ Область не распознана.\n\nПример: /objects Киевская область нефтебаза\nТакже поддерживаются украинские и английские названия.";
+  if(/ambiguous category/i.test(m))return "⚠️ Запрос неоднозначен. Уточните тип объекта.\n"+m.replace(/^ambiguous category:?\s*/i,"").slice(0,500);
+  return "⚠️ Региональный поиск временно не выполнен.\n"+m.slice(0,500);
+}
 
 async function areaIntelRequest(payload:any){
   const u=Deno.env.get("SUPABASE_URL"),k=Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
@@ -1004,7 +987,7 @@ async function processAdminUpdate(sb:any,token:string,adminId:string,u:any){
       return true;
     }
     if(action==="objects_help"){
-      await tg(token,"sendMessage",{chat_id:adminId,text:"🏭 Объекты области\n\n/objects Полтавская область АЗС\n/objects Київська аптеки\n/objects Львівська школы\n\nПолный CSV:\n/objects_csv Полтавская область АЗС\n\nКатегории: АЗС, подстанции/ПС, электростанции/ТЭЦ/АЭС, резервуары/ёмкости, больницы, аптеки, школы, пожарные части, полиция, энергетика, промышленность, склады, супермаркеты, телеком, транспорт.",reply_markup:panelKeyboard});
+      await tg(token,"sendMessage",{chat_id:adminId,text:"🏭 Объекты области\n\n/objects Полтавская область АЗС\n/objects Полтавская область нефтебаза\n/objects Київська елеватор\n/objects Львівська водонапорная башня\n\nПолный CSV:\n/objects_csv Полтавская область АЗС\n\nМожно вводить и произвольное название объекта. Примеры: нефтебаза, элеватор, водонапорная башня, карьер, насосная станция, трансформатор.",reply_markup:panelKeyboard});
       return true;
     }
     if(action==="nearby"){await askLocation(token,adminId);return true}
