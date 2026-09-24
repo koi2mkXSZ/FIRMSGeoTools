@@ -142,7 +142,8 @@ function deepOsintText(d:any){
     const rs=String(radar.status??"—");
     lines.push("RainViewer: "+(rs==="frame_available"?"radar frame есть"+(radar.time_delta_minutes!=null?" • Δt "+Number(radar.time_delta_minutes).toFixed(1)+" мин":""):rs==="history_unavailable"?"история для времени события недоступна":rs));
     const ls=String(li.status??"—");
-    lines.push("MTG LI: "+(ls==="product_coverage_available"?"NRT product coverage есть • "+Number(li.product_count??0)+" products":"нет product coverage")+" • local flashes: "+String(li.local_signal??"not_extracted"));
+    if(ls==="disabled")lines.push("MTG LI: отключен");
+    else lines.push("MTG LI: "+(ls==="product_coverage_available"?"NRT product coverage есть • "+Number(li.product_count??0)+" products":"нет product coverage")+" • local flashes: "+String(li.local_signal??"not_extracted"));
   }
   lines.push("");
 

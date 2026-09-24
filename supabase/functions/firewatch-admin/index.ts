@@ -434,7 +434,7 @@ async function deepOsintText(sb:any,q?:string){
     `GeoNames: ${gn.status??"not_cached"} • places ${Array.isArray(gn.places)?gn.places.length:0}`,
     ...(Array.isArray(gn.places)?gn.places.slice(0,5).map((p:any)=>{const code=String(p.feature_code??"");const type=code==="PPLA"?"административный центр":code==="PPLA2"?"адм. центр уровня 2":code==="PPLA3"?"адм. центр уровня 3":code==="PPLA4"?"адм. центр уровня 4":code==="PPL"?"населённый пункт":String(p.feature_code_name??p.feature_class_name??code??"место");return `• ${p.name??p.toponym_name??"—"}${p.toponym_name&&p.toponym_name!==p.name?" ("+p.toponym_name+")":""} • ${Number.isFinite(Number(p.distance_km))?Number(p.distance_km).toFixed(1)+" км":"—"} • ${type}`;}):[]),
     `Visual: Panoramax ${Number(pano.count??0)} • OAM ${Number(oam.count??0)} • latest OAM ${oam.latest_datetime?String(oam.latest_datetime).slice(0,10):"—"}`,
-    `Environment: RainViewer ${radar.status??"not_cached"}${radar.time_delta_minutes!=null?" • Δt "+Number(radar.time_delta_minutes).toFixed(1)+" min":""} • MTG LI ${li.status??"not_cached"} • products ${Number(li.product_count??0)} • local ${li.local_signal??"not_extracted"}`,
+    `Environment: RainViewer ${radar.status??"not_cached"}${radar.time_delta_minutes!=null?" • Δt "+Number(radar.time_delta_minutes).toFixed(1)+" min":""} • MTG LI ${li.status==="disabled"?"disabled":(li.status??"not_cached")}`,
     `Provenance: statements ${Number(prov.statements??0)} • independent ${Number(prov.independent_statements??0)} • reviewed ${Number(prov.reviewed??0)} • pending ${Number(prov.pending_reviews??0)} • high ${Number(prov.high_priority_reviews??0)}`,
     ""
   ];
