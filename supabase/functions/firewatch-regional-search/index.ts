@@ -2,6 +2,7 @@ import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "@supabase/supabase-js";
 import { diceSimilarity as dice, normalizeRegionQuery as norm, resolveOblastRow, splitRegionObjectQuery, validateOblastAliases } from "./region_aliases.ts";
 import { REGIONAL_SPECS as SPECS, type RegionalSpec as Spec, buildFilterPredicate, extractRegionalFilters, mergeFilters, multiKey, normalizeFilters, parseRegionalQuery, resolveCategoryList, splitObjectExpression, validateRegionalCategories } from "./regional_categories.ts";
+import { applyObjectFilters, enrichSettlements, toGeoJson, type SettlementCandidate } from "./regional_enrichment.ts";
 
 const POSTPASS="https://postpass.geofabrik.de/api/interpreter";
 const FUSED="https://www.fused.io/server/v1/realtime-shared/UDF_Overture_Maps_Example/run/tiles";
@@ -9,6 +10,8 @@ const OVERTURE_RELEASE="2026-04-15-0";
 const CACHE_MS=12*3600_000;
 const RAW_LIMIT=7000;
 const OUTPUT_LIMIT=5000;
+const SETTLEMENT_LIMIT=20000;
+const CACHE_VERSION="r43_1_2";
 
 function json(x:unknown,s=200){return new Response(JSON.stringify(x,null,2),{status:s,headers:{"content-type":"application/json; charset=utf-8","cache-control":"no-store"}})}
 function errText(e:any){return e instanceof Error?e.message:(e&&typeof e==="object"?JSON.stringify({code:e.code,message:e.message,details:e.details,hint:e.hint}):String(e))}
@@ -19,15 +22,31 @@ function pointInPolygon(lon:number,lat:number,rings:any[]){if(!Array.isArray(rin
 function insideGeom(lat:number,lon:number,g:any){if(g?.type==="Polygon")return pointInPolygon(lon,lat,g.coordinates);if(g?.type==="MultiPolygon")return (g.coordinates??[]).some((p:any)=>pointInPolygon(lon,lat,p));return false}
 function geoCenter(f:any){const p=f?.properties??{},b=p?.bbox;if(b&&[b.xmin,b.xmax,b.ymin,b.ymax].every((x:any)=>Number.isFinite(Number(x))))return[(Number(b.ymin)+Number(b.ymax))/2,(Number(b.xmin)+Number(b.xmax))/2];const g=f?.geometry,c=g?.coordinates;if(g?.type==="Point"&&Array.isArray(c))return[Number(c[1]),Number(c[0])];return null}
 function sourceUrl(src:string,id:string,qid?:string|null){if(src==="Wikidata"&&qid)return"https://www.wikidata.org/wiki/"+qid;if(src==="OpenStreetMap"){const m=String(id).match(/^([NWR]):(.+)$/);if(m)return"https://www.openstreetmap.org/"+(m[1]==="N"?"node":m[1]==="W"?"way":"relation")+"/"+m[2]}return null}
-function addrFromTags(t:any){const city=t?.["addr:city"]??t?.["addr:town"]??t?.["addr:village"]??t?.["addr:place"]??null,street=t?.["addr:street"]??null,house=t?.["addr:housenumber"]??null;return{settlement:city?String(city):null,address:[street,house].filter(Boolean).join(" ")||null}}
+function addrFromTags(t:any){const city=t?.["addr:city"]??t?.["addr:town"]??t?.["addr:village"]??t?.["addr:place"]??null,full=t?.["addr:full"]??null,street=t?.["addr:street"]??null,house=t?.["addr:housenumber"]??null;return{settlement:city?String(city):null,address:full?String(full):([street,house].filter(Boolean).join(" ")||null)}}
 function osmName(t:any,s:Spec){return String(t?.["name:uk"]??t?.["name:ru"]??t?.name??t?.brand??t?.operator??s.label).slice(0,220)}
-function safeOsm(t:any){const keys=["name","name:uk","name:ru","name:en","brand","operator","wikidata","website","opening_hours","phone","ref","voltage","substance","utility","generator:source","plant:source","pumping_station","addr:city","addr:town","addr:village","addr:place","addr:street","addr:housenumber","amenity","shop","healthcare","building","landuse","industrial","power","man_made","tower:type","telecom","railway","aeroway","water","waterway","bridge","harbour","seamark:type"];const o:any={};for(const k of keys)if(t?.[k]!=null)o[k]=String(t[k]).slice(0,240);return o}
+function safeOsm(t:any){const keys=["name","name:uk","name:ru","name:en","brand","operator","wikidata","website","opening_hours","phone","ref","voltage","substance","utility","generator:source","plant:source","pumping_station","addr:city","addr:town","addr:village","addr:place","addr:full","addr:street","addr:housenumber","is_in","brand:uk","brand:ru","operator:uk","operator:ru","amenity","shop","healthcare","building","landuse","industrial","power","man_made","tower:type","telecom","railway","aeroway","water","waterway","bridge","harbour","seamark:type"];const o:any={};for(const k of keys)if(t?.[k]!=null)o[k]=String(t[k]).slice(0,240);return o}
 function postpassSql(b:number[],s:Spec){const [minLon,minLat,maxLon,maxLat]=b.map(Number);return `
 SELECT osm_id,osm_type,tags,ST_PointOnSurface(geom) geom
 FROM postpass_pointlinepolygon
 WHERE geom && ST_MakeEnvelope(${minLon.toFixed(7)},${minLat.toFixed(7)},${maxLon.toFixed(7)},${maxLat.toFixed(7)},4326)
   AND ${s.osm}
 LIMIT ${RAW_LIMIT}`}
+function postpassSettlementSql(b:number[]){const [minLon,minLat,maxLon,maxLat]=b.map(Number);return `
+SELECT osm_id,osm_type,tags,ST_PointOnSurface(geom) geom
+FROM postpass_pointlinepolygon
+WHERE geom && ST_MakeEnvelope(${minLon.toFixed(7)},${minLat.toFixed(7)},${maxLon.toFixed(7)},${maxLat.toFixed(7)},4326)
+  AND tags->>'place' IN ('city','town','village','hamlet')
+  AND coalesce(tags->>'name:uk',tags->>'name:ru',tags->>'name',tags->>'name:en') IS NOT NULL
+LIMIT ${SETTLEMENT_LIMIT}`}
+function settlementCandidates(d:any,geom:any){
+ const out:SettlementCandidate[]=[];
+ for(const f of Array.isArray(d?.features)?d.features:[]){
+  const p=f?.properties??{},t=p.tags??{},ctr=geoCenter(f),name=t?.["name:uk"]??t?.["name:ru"]??t?.name??t?.["name:en"];
+  if(!ctr||!name||!Number.isFinite(ctr[0])||!Number.isFinite(ctr[1])||!insideGeom(ctr[0],ctr[1],geom))continue;
+  out.push({name:String(name).slice(0,220),latitude:ctr[0],longitude:ctr[1],place:t?.place?String(t.place):null,population:Number.isFinite(Number(t?.population))?Number(t.population):null,source_id:String(p.osm_type??"")+":"+String(p.osm_id??"")});
+ }
+ return out;
+}
 async function postpass(sql:string){const r=await fetch(POSTPASS,{method:"POST",headers:{"accept":"application/json","content-type":"application/x-www-form-urlencoded","user-agent":"GeoWatch-RegionalSearch/1.0"},body:new URLSearchParams([["data",sql]]),signal:AbortSignal.timeout(45000)});const t=await r.text();if(!r.ok)throw new Error("Postpass HTTP "+r.status+": "+t.slice(0,220));try{return JSON.parse(t)}catch{throw new Error("Postpass invalid JSON")}}
 async function fetchGeo(url:string){const r=await fetch(url,{headers:{"accept":"application/geo+json,application/json","user-agent":"GeoWatch-RegionalSearch/1.0"},signal:AbortSignal.timeout(15000)});const t=await r.text();if(!r.ok)throw new Error("HTTP "+r.status+": "+t.slice(0,160));return JSON.parse(t)}
 function overtureText(p:any){return norm([p?.class,p?.basic_category,p?.subtype,JSON.stringify(p?.categories??{}),JSON.stringify(p?.taxonomy??{})].filter(Boolean).join(" "))}
@@ -48,11 +67,42 @@ async function overtureRegion(_b:number[],_geom:any,_s:Spec){
     errors:[]
   };
 }
-async function wikidataByQids(rows:any[]){const ids=[...new Set(rows.map(x=>x.wikidata_qid).filter((x:any)=>/^Q\d+$/.test(String(x))))] as string[];const out:any[]=[];for(let i=0;i<ids.length;i+=50){const part=ids.slice(i,i+50),u=new URL("https://www.wikidata.org/w/api.php");u.searchParams.set("action","wbgetentities");u.searchParams.set("ids",part.join("|"));u.searchParams.set("props","labels|descriptions");u.searchParams.set("languages","uk|ru|en");u.searchParams.set("format","json");u.searchParams.set("origin","*");const r=await fetch(u.toString(),{headers:{"user-agent":"GeoWatch-RegionalSearch/1.0"},signal:AbortSignal.timeout(15000)});const t=await r.text();if(!r.ok)throw new Error("Wikidata HTTP "+r.status);const d=JSON.parse(t);for(const q of part){const e=d?.entities?.[q],seed=rows.find(x=>x.wikidata_qid===q);if(!e||!seed)continue;const label=e?.labels?.uk?.value??e?.labels?.ru?.value??e?.labels?.en?.value??seed.name;out.push({source:"Wikidata",source_id:q,wikidata_qid:q,name:String(label),latitude:seed.latitude,longitude:seed.longitude,brand:seed.brand??null,operator:seed.operator??null,settlement:seed.settlement??null,address:seed.address??null,tags:{description:e?.descriptions?.uk?.value??e?.descriptions?.ru?.value??e?.descriptions?.en?.value??null}})}}return out}
+async function wikidataByQids(rows:any[]){const ids=[...new Set(rows.map(x=>x.wikidata_qid).filter((x:any)=>/^Q\d+$/.test(String(x))))] as string[];const out:any[]=[];for(let i=0;i<ids.length;i+=50){const part=ids.slice(i,i+50),u=new URL("https://www.wikidata.org/w/api.php");u.searchParams.set("action","wbgetentities");u.searchParams.set("ids",part.join("|"));u.searchParams.set("props","labels|descriptions");u.searchParams.set("languages","uk|ru|en");u.searchParams.set("format","json");u.searchParams.set("origin","*");const r=await fetch(u.toString(),{headers:{"user-agent":"GeoWatch-RegionalSearch/1.0"},signal:AbortSignal.timeout(15000)});const t=await r.text();if(!r.ok)throw new Error("Wikidata HTTP "+r.status);const d=JSON.parse(t);for(const q of part){const e=d?.entities?.[q],seed=rows.find(x=>x.wikidata_qid===q);if(!e||!seed)continue;const label=e?.labels?.uk?.value??e?.labels?.ru?.value??e?.labels?.en?.value??seed.name;out.push({source:"Wikidata",source_id:q,wikidata_qid:q,name:String(label),latitude:seed.latitude,longitude:seed.longitude,brand:seed.brand??null,operator:seed.operator??null,settlement:seed.settlement??null,address:seed.address??null,category_keys:Array.isArray(seed.category_keys)?[...seed.category_keys]:[],tags:{description:e?.descriptions?.uk?.value??e?.descriptions?.ru?.value??e?.descriptions?.en?.value??null}})}}return out}
 function generic(v:any,s:Spec){const x=norm(v);return !x||x===norm(s.label)||new Set(["fuel","gas station","petrol station","station","industrial","warehouse","school","hospital","pharmacy"]).has(x)}
-function resolve(rows:any[],s:Spec){const rank=(x:string)=>x==="OpenStreetMap"?3:x==="Wikidata"?2:1;rows=[...rows].sort((a,b)=>rank(b.source)-rank(a.source));const entities:any[]=[];const qmap=new Map<string,any>();const add=(e:any,r:any,method:string,confidence:number)=>{e.sources.push({source:r.source,source_id:r.source_id,name:r.name,match_method:method,match_confidence:confidence,url:sourceUrl(r.source,r.source_id,r.wikidata_qid),wikidata_qid:r.wikidata_qid??null});if(!e.wikidata_qid&&r.wikidata_qid){e.wikidata_qid=r.wikidata_qid;qmap.set(r.wikidata_qid,e)}if(!e.address&&r.address)e.address=r.address;if(!e.settlement&&r.settlement)e.settlement=r.settlement;if(!e.brand&&r.brand)e.brand=r.brand;if(!e.operator&&r.operator)e.operator=r.operator;e.resolution_status=e.sources.length>1?(method==="exact_wikidata_qid"?"auto_exact":"auto_probable"):"single_source";e.resolution_confidence=Math.min(e.resolution_confidence,confidence)};for(const r of rows){if(r.wikidata_qid&&qmap.has(r.wikidata_qid)){add(qmap.get(r.wikidata_qid),r,"exact_wikidata_qid",100);continue}let best:any=null;for(const e of entities){if(e.sources.some((x:any)=>x.source===r.source))continue;const d=hav(e.latitude,e.longitude,r.latitude,r.longitude),sim=generic(e.canonical_name,s)||generic(r.name,s)?0:dice(e.canonical_name,r.name);let conf=Math.round(sim*78+Math.max(0,1-d/60)*22);if((sim>=.86&&d<=45)||(sim>=.72&&d<=20))conf=Math.max(conf,87);if(conf>=86&&(!best||conf>best.conf))best={e,conf}}if(best){add(best.e,r,"name_distance",best.conf);continue}const e={canonical_name:r.name,latitude:r.latitude,longitude:r.longitude,wikidata_qid:r.wikidata_qid??null,brand:r.brand??null,operator:r.operator??null,settlement:r.settlement??null,address:r.address??null,resolution_status:"single_source",resolution_confidence:100,sources:[] as any[]};entities.push(e);if(e.wikidata_qid)qmap.set(e.wikidata_qid,e);add(e,r,"single_source",100)}for(const e of entities){const osm=e.sources.find((x:any)=>x.source==="OpenStreetMap"),ot=e.sources.find((x:any)=>x.source==="Overture"),wd=e.sources.find((x:any)=>x.source==="Wikidata");e.canonical_name=osm?.name??ot?.name??wd?.name??e.canonical_name;e.source_count=new Set(e.sources.map((x:any)=>x.source)).size}return entities}
+function resolve(rows:any[],s:Spec){
+ const rank=(x:string)=>x==="OpenStreetMap"?3:x==="Wikidata"?2:1;rows=[...rows].sort((a,b)=>rank(b.source)-rank(a.source));
+ const entities:any[]=[],qmap=new Map<string,any>();
+ const cats=(x:any)=>Array.isArray(x?.category_keys)?x.category_keys.map(String):[];
+ const shares=(a:any,b:any)=>{const A=new Set(cats(a));return cats(b).some((x:string)=>A.has(x))};
+ const add=(e:any,r:any,method:string,confidence:number)=>{
+  e.sources.push({source:r.source,source_id:r.source_id,name:r.name,match_method:method,match_confidence:confidence,url:sourceUrl(r.source,r.source_id,r.wikidata_qid),wikidata_qid:r.wikidata_qid??null});
+  e.category_keys=[...new Set([...cats(e),...cats(r)])];
+  if(!e.wikidata_qid&&r.wikidata_qid){e.wikidata_qid=r.wikidata_qid;qmap.set(r.wikidata_qid,e)}
+  if(!e.address&&r.address)e.address=r.address;if(!e.settlement&&r.settlement)e.settlement=r.settlement;if(!e.brand&&r.brand)e.brand=r.brand;if(!e.operator&&r.operator)e.operator=r.operator;
+  e.resolution_status=e.sources.length>1?(method==="exact_wikidata_qid"?"auto_exact":"auto_probable"):"single_source";e.resolution_confidence=Math.min(e.resolution_confidence,confidence);
+ };
+ for(const r of rows){
+  if(r.wikidata_qid&&qmap.has(r.wikidata_qid)){add(qmap.get(r.wikidata_qid),r,"exact_wikidata_qid",100);continue}
+  let best:any=null;
+  for(const e of entities){
+   if(e.sources.some((x:any)=>x.source===r.source)||!shares(e,r))continue;
+   const d=hav(e.latitude,e.longitude,r.latitude,r.longitude),sim=generic(e.canonical_name,s)||generic(r.name,s)?0:dice(e.canonical_name,r.name);
+   let conf=Math.round(sim*78+Math.max(0,1-d/60)*22);if((sim>=.86&&d<=45)||(sim>=.72&&d<=20))conf=Math.max(conf,87);
+   if(conf>=86&&(!best||conf>best.conf))best={e,conf};
+  }
+  if(best){add(best.e,r,"name_distance",best.conf);continue}
+  const e={canonical_name:r.name,latitude:r.latitude,longitude:r.longitude,wikidata_qid:r.wikidata_qid??null,brand:r.brand??null,operator:r.operator??null,settlement:r.settlement??null,address:r.address??null,category_keys:cats(r),resolution_status:"single_source",resolution_confidence:100,sources:[] as any[]};
+  entities.push(e);if(e.wikidata_qid)qmap.set(e.wikidata_qid,e);add(e,r,"single_source",100);
+ }
+ for(const e of entities){const osm=e.sources.find((x:any)=>x.source==="OpenStreetMap"),ot=e.sources.find((x:any)=>x.source==="Overture"),wd=e.sources.find((x:any)=>x.source==="Wikidata");e.canonical_name=osm?.name??ot?.name??wd?.name??e.canonical_name;e.source_count=new Set(e.sources.map((x:any)=>x.source)).size}
+ return entities;
+}
 function csvCell(v:any){const s=String(v??"");return /[",\n\r;]/.test(s)?'"'+s.replace(/"/g,'""')+'"':s}
-function toCsv(objects:any[]){const head=["No","Name","Brand","Operator","Settlement","Address","Latitude","Longitude","Sources","Source count","Resolution status","Confidence","Wikidata QID"];const rows=objects.map((x,i)=>[i+1,x.canonical_name,x.brand,x.operator,x.settlement,x.address,Number(x.latitude).toFixed(6),Number(x.longitude).toFixed(6),x.sources.map((s:any)=>s.source+":"+s.source_id).join(" | "),x.source_count,x.resolution_status,x.resolution_confidence,x.wikidata_qid]);return[head,...rows].map(r=>r.map(csvCell).join(",")).join("\r\n")}
+function toCsv(objects:any[]){
+ const head=["No","Name","Categories","Brand","Operator","Settlement","Settlement method","Settlement distance m","Address","Address quality","Normalized location","Latitude","Longitude","Sources","Source count","Resolution status","Confidence","Wikidata QID"];
+ const rows=objects.map((x,i)=>[i+1,x.canonical_name,(x.category_keys??[]).join(" | "),x.brand,x.operator,x.settlement,x.settlement_method,x.settlement_distance_m,x.address,x.address_quality,x.normalized_location,Number(x.latitude).toFixed(6),Number(x.longitude).toFixed(6),x.sources.map((s:any)=>s.source+":"+s.source_id).join(" | "),x.source_count,x.resolution_status,x.resolution_confidence,x.wikidata_qid]);
+ return[head,...rows].map(r=>r.map(csvCell).join(",")).join("\r\n");
+}
 async function oblastRows(sb:any){const {data,error}=await sb.from("oblasts").select("id,code,name_uk,name_en");if(error)throw error;return data??[]}
 async function resolveOblast(sb:any,q:any){const rows=await oblastRows(sb),best=resolveOblastRow(rows,q);if(!best)return null;const {data:g,error:ge}=await sb.rpc("firewatch_oblast_geometry",{p_oblast_id:best.id});if(ge)throw ge;return{...best,...g}}
 
@@ -102,7 +152,8 @@ Deno.serve(async(req:Request)=>{
 
   const oblast=await resolveOblast(sb,oblastInput);if(!oblast)return json({ok:false,error:"oblast not found"},404);
   const specs=plan.resolutions.map(x=>x.spec!).filter(Boolean);
-  const filterPredicate=buildFilterPredicate(filters);
+  const sqlFilters={...filters,settlement:null,source:null,min_confidence:null,has_address:null};
+  const filterPredicate=buildFilterPredicate(sqlFilters);
   const labels=specs.map(x=>x.label);
   const hasFilters=Object.values(filters).some(Boolean);
   const combinedKey=specs.length===1&&!hasFilters?specs[0].key:"plan_"+multiKey(plan.resolutions,filters);
@@ -135,19 +186,22 @@ Deno.serve(async(req:Request)=>{
     });
   }
 
-  const queryKey=String(oblast.code)+":"+spec.key;
+  const queryKey=String(oblast.code)+":"+CACHE_VERSION+":"+spec.key;
   const {data:cached,error:ce}=await sb.from("regional_object_search_cache").select("*").eq("query_key",queryKey).maybeSingle();if(ce)throw ce;
   const age=Date.now()-Date.parse(String(cached?.queried_at??""));
   if(cached&&!body.refresh&&Number.isFinite(age)&&age<CACHE_MS){
-    if(String(body.format??"").toLowerCase()==="csv")return new Response("\uFEFF"+toCsv(cached.objects??[]),{headers:{"content-type":"text/csv; charset=utf-8","content-disposition":'attachment; filename="'+spec.key+"-"+String(oblast.code)+'.csv"'}});
+    const format=String(body.format??"").toLowerCase(),cachedObjects=Array.isArray(cached.objects)?cached.objects:[];
+    if(format==="csv")return new Response("\uFEFF"+toCsv(cachedObjects),{headers:{"content-type":"text/csv; charset=utf-8","content-disposition":'attachment; filename="'+spec.key+"-"+String(oblast.code)+'.csv"'}});
+    if(format==="geojson"){const g=toGeoJson(cachedObjects,{oblast_code:oblast.code,oblast_name:oblast.name_uk,category_label:spec.label,query_key:queryKey,cached:true});return new Response(JSON.stringify(g),{headers:{"content-type":"application/geo+json; charset=utf-8","cache-control":"no-store","content-disposition":'attachment; filename="'+spec.key+"-"+String(oblast.code)+'.geojson"'}})}
     const payload={ok:true,cached:true,...cached,category_label:spec.label,resolution:cached?.summary?.resolution??resolutionInfo,oblast:{id:oblast.id,code:oblast.code,name_uk:oblast.name_uk,name_en:oblast.name_en,bbox:oblast.bbox,center:oblast.center}};
     if(body.count_only===true)return json({...payload,count_only:true,objects:[]});
     return json(payload);
   }
 
-  const errors:string[]=[];let osmStatus="active",osmTruncated=false,overture:any={status:"not_checked",features:[],tiles_total:0,tiles_ok:0},wd:any[]=[];
+  const errors:string[]=[];let osmStatus="active",osmTruncated=false,overture:any={status:"not_checked",features:[],tiles_total:0,tiles_ok:0},wd:any[]=[],settlementStatus="skipped",settlements: SettlementCandidate[]=[];
   const bbox=(oblast.bbox??[]).map(Number),geom=oblast.geometry;if(bbox.length!==4||!geom)throw new Error("oblast geometry unavailable");
-  const osmRows:any[]=[],osmMap=new Map<string,any>();
+  const osmRows:any[]=[],osmMap=new Map<string,any>(),needSettlements=body.count_only!==true||Boolean(filters.settlement);
+  const settlementPromise=needSettlements?postpass(postpassSettlementSql(bbox)):Promise.resolve(null);
   const settled=await Promise.allSettled(querySpecs.map(x=>postpass(postpassSql(bbox,x))));
   let osmOk=0;
   for(let qi=0;qi<settled.length;qi++){
@@ -160,29 +214,40 @@ Deno.serve(async(req:Request)=>{
       const p=f?.properties??{},t=p.tags??{},ctr=geoCenter(f);
       if(!ctr||!Number.isFinite(ctr[0])||!Number.isFinite(ctr[1])||!insideGeom(ctr[0],ctr[1],geom))continue;
       const sourceId=String(p.osm_type??"")+":"+String(p.osm_id??"");
-      if(osmMap.has(sourceId))continue;
+      const existing=osmMap.get(sourceId);if(existing){existing.category_keys=[...new Set([...(existing.category_keys??[]),qs.key])];continue}
       const ad=addrFromTags(t),qid=/^Q\d+$/.test(String(t?.wikidata??""))?String(t.wikidata):null;
-      const row={source:"OpenStreetMap",source_id:sourceId,name:osmName(t,qs),latitude:ctr[0],longitude:ctr[1],wikidata_qid:qid,brand:t?.brand?String(t.brand):null,operator:t?.operator?String(t.operator):null,settlement:ad.settlement,address:ad.address,tags:safeOsm(t)};
+      const row={source:"OpenStreetMap",source_id:sourceId,name:osmName(t,qs),latitude:ctr[0],longitude:ctr[1],wikidata_qid:qid,brand:t?.brand?String(t.brand):null,operator:t?.operator?String(t.operator):null,settlement:ad.settlement,address:ad.address,category_keys:[qs.key],tags:safeOsm(t)};
       osmMap.set(sourceId,row);osmRows.push(row);
       if(osmRows.length>=12000){osmTruncated=true;break}
     }
     if(osmRows.length>=12000)break;
   }
   osmStatus=osmOk===querySpecs.length?"active":osmOk>0?"partial":"error";
+  if(needSettlements){
+    try{const sd=await settlementPromise;settlements=settlementCandidates(sd,geom);settlementStatus=(Array.isArray(sd?.features)&&sd.features.length>=SETTLEMENT_LIMIT)?"partial":"active";if(settlementStatus==="partial")errors.push("OSM settlements: candidate limit reached")}
+    catch(e){settlementStatus="error";if(filters.settlement)errors.push("Settlement enrichment: "+errText(e))}
+  }
   try{overture=await overtureRegion(bbox,geom,spec);if(["error","partial","tile_limit"].includes(String(overture.status)))errors.push("Overture: "+overture.status+(overture.errors?.length?" • "+overture.errors[0]:""))}catch(e){overture={status:"error",features:[],tiles_total:0,tiles_ok:0};errors.push("Overture: "+errText(e))}
-  if(body.count_only!==true){try{wd=await wikidataByQids(osmRows)}catch(e){errors.push("Wikidata: "+errText(e))}}
-  const objects=resolve([...osmRows,...overture.features,...wd],spec).slice(0,OUTPUT_LIMIT);
-  const truncated=osmTruncated||objects.length>=OUTPUT_LIMIT;
-  const sources={osm_postpass:osmStatus,osm_query_count:querySpecs.length,osm_queries_ok:osmOk,overture:overture.status,overture_reason:overture.reason??null,wikidata:body.count_only===true?"skipped_count_only":wd.length?"active":"not_applicable",wikidata_mode:"qid_enrichment",overture_release:OVERTURE_RELEASE,overture_tiles_total:overture.tiles_total,overture_tiles_ok:overture.tiles_ok};
-  const status=osmStatus!=="active"||["error","partial","tile_limit"].includes(String(overture.status))||truncated?"degraded":"active",now=new Date().toISOString();
-  const summary={resolved_objects:objects.length,multi_source:objects.filter((x:any)=>x.source_count>1).length,osm_objects:osmRows.length,overture_objects:overture.features.length,wikidata_objects:wd.length,truncated,cache_ttl_hours:12,resolution:resolutionInfo,filters,category_count:specs.length};
+  const sourceFilter=norm(filters.source??""),needWikidata=body.count_only!==true||["wikidata","wd"].includes(sourceFilter);
+  if(needWikidata){try{wd=await wikidataByQids(osmRows)}catch(e){errors.push("Wikidata: "+errText(e))}}
+  const resolved=resolve([...osmRows,...overture.features,...wd],spec);
+  const enriched=enrichSettlements(resolved,settlements);
+  const filtered=applyObjectFilters(enriched.objects,filters);
+  const objects=filtered.slice(0,OUTPUT_LIMIT);
+  const truncated=osmTruncated||filtered.length>OUTPUT_LIMIT;
+  const byCategory:any={};for(const x of objects)for(const k of Array.isArray(x.category_keys)?x.category_keys:[])byCategory[k]=(byCategory[k]??0)+1;
+  const sources={osm_postpass:osmStatus,osm_query_count:querySpecs.length,osm_queries_ok:osmOk,settlement_enrichment:settlementStatus,settlement_candidates:settlements.length,overture:overture.status,overture_reason:overture.reason??null,wikidata:needWikidata?(wd.length?"active":"not_applicable"):"skipped_count_only",wikidata_mode:"qid_enrichment",overture_release:OVERTURE_RELEASE,overture_tiles_total:overture.tiles_total,overture_tiles_ok:overture.tiles_ok};
+  const status=osmStatus!=="active"||["error","partial","tile_limit"].includes(String(overture.status))||(filters.settlement&&settlementStatus!=="active")||truncated?"degraded":"active",now=new Date().toISOString();
+  const summary={resolved_objects:objects.length,base_resolved_objects:resolved.length,filtered_out:Math.max(0,resolved.length-filtered.length),multi_source:objects.filter((x:any)=>x.source_count>1).length,osm_objects:osmRows.length,overture_objects:overture.features.length,wikidata_objects:wd.length,truncated,cache_ttl_hours:12,cache_version:CACHE_VERSION,resolution:resolutionInfo,filters,category_count:specs.length,by_category:byCategory,addressing:enriched.summary};
   const row={query_key:queryKey,oblast_id:oblast.id,oblast_code:oblast.code,oblast_name:oblast.name_uk,category_key:spec.key,queried_at:now,status,source_status:sources,summary,objects,errors,updated_at:now};
 
   if(body.count_only!==true){
     const {error:ue}=await sb.from("regional_object_search_cache").upsert(row,{onConflict:"query_key"});if(ue)throw ue;
   }
-  if(String(body.format??"").toLowerCase()==="csv")return new Response("\uFEFF"+toCsv(objects),{headers:{"content-type":"text/csv; charset=utf-8","content-disposition":'attachment; filename="'+spec.key+"-"+String(oblast.code)+'.csv"'}});
-  const payload={ok:true,cached:false,...row,category_label:spec.label,resolution:resolutionInfo,oblast:{id:oblast.id,code:oblast.code,name_uk:oblast.name_uk,name_en:oblast.name_en,bbox:oblast.bbox,center:oblast.center},policy:"Objects are public-source inventory candidates. Filters and free-text matching use a safe whitelist of public OSM fields. Completeness depends on public source coverage and tagging."};
+  const format=String(body.format??"").toLowerCase();
+  if(format==="csv")return new Response("\uFEFF"+toCsv(objects),{headers:{"content-type":"text/csv; charset=utf-8","content-disposition":'attachment; filename="'+spec.key+"-"+String(oblast.code)+'.csv"'}});
+  if(format==="geojson"){const g=toGeoJson(objects,{oblast_code:oblast.code,oblast_name:oblast.name_uk,category_label:spec.label,query_key:queryKey,cached:false,summary});return new Response(JSON.stringify(g),{headers:{"content-type":"application/geo+json; charset=utf-8","cache-control":"no-store","content-disposition":'attachment; filename="'+spec.key+"-"+String(oblast.code)+'.geojson"'}})}
+  const payload={ok:true,cached:false,...row,category_label:spec.label,resolution:resolutionInfo,oblast:{id:oblast.id,code:oblast.code,name_uk:oblast.name_uk,name_en:oblast.name_en,bbox:oblast.bbox,center:oblast.center},policy:"Objects are public-source inventory candidates. Missing settlements may be inferred from the nearest public OSM place within 25 km and are marked settlement_method=osm_nearest. Filters and free-text matching use a safe whitelist of public OSM fields. Completeness depends on public source coverage and tagging."};
   if(body.count_only===true)return json({...payload,count_only:true,objects:[]});
   return json(payload);
  }catch(e){console.error("regional search error",errText(e));return json({ok:false,error:errText(e)},500)}
