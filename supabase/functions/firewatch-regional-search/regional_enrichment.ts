@@ -1,4 +1,4 @@
-import { normalizeRegionQuery as norm } from "./region_aliases.ts";
+import { diceSimilarity, normalizeRegionQuery as norm } from "./region_aliases.ts";
 import type { RegionalFilters } from "./regional_categories.ts";
 
 export type SettlementCandidate={
@@ -9,6 +9,43 @@ export type SettlementCandidate={
  population?:number|null;
  source_id?:string|null;
 };
+
+export type SettlementTarget=SettlementCandidate&{
+ mode:"radius_fallback";
+ radius_m:number;
+ name_score:number;
+};
+
+function settlementRadiusM(place:unknown){
+ const p=norm(place);
+ return p==="city"?15000:p==="town"?9000:p==="village"?4500:p==="hamlet"?2500:7000;
+}
+
+export function resolveSettlementTarget(settlements:SettlementCandidate[],query:unknown):SettlementTarget|null{
+ const q=norm(query);if(!q)return null;
+ const rank:any={city:4,town:3,village:2,hamlet:1};
+ let best:any=null;
+ for(const s of settlements??[]){
+  const n=norm(s.name);if(!n)continue;
+  const score=n===q?1:diceSimilarity(n,q);
+  if(score<.78)continue;
+  const placeRank=rank[norm(s.place)]??0,pop=Number(s.population??0)||0;
+  const value=score*1000+placeRank*10+Math.min(9,Math.log10(Math.max(1,pop)));
+  if(!best||value>best.value)best={s,score,value};
+ }
+ if(!best)return null;
+ return{...best.s,mode:"radius_fallback",radius_m:settlementRadiusM(best.s.place),name_score:Number(best.score.toFixed(3))};
+}
+
+export function applySettlementTarget(objects:any[],target:SettlementTarget|null){
+ if(!target)return objects??[];
+ const r=Number(target.radius_m);
+ return (objects??[]).filter((x:any)=>{
+  const lat=Number(x.latitude),lon=Number(x.longitude);
+  if(!Number.isFinite(lat)||!Number.isFinite(lon))return false;
+  return haversineM(lat,lon,target.latitude,target.longitude)<=r;
+ });
+}
 
 function haversineM(a:number,b:number,c:number,d:number){
  const p=Math.PI/180,R=6371000,da=(c-a)*p,db=(d-b)*p;
