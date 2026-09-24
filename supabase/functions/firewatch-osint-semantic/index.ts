@@ -185,9 +185,13 @@ Deno.serve(async(req:Request)=>{
     const cq=await sb.rpc("osint_semantic_assign_cluster",{p_item:itemId});if(cq.error)throw cq.error;if(cq.data)clusters++;
     processed++;if(w.fire_event_id)affected.add(String(w.fire_event_id));
   }
-  let divergences=0;
-  for(const id of [...affected].slice(0,100)){const q=await sb.rpc("osint_refresh_divergences",{p_event:id});if(!q.error)divergences+=Number(q.data?.divergences??0)}
-  const state={status:"active",version:VERSION,last_check:new Date().toISOString(),processed,entities:entityCount,claims:claimCount,cluster_assignments:clusters,events_affected:affected.size,geo_mismatch_candidates:geoMismatch,divergences};
+  let divergences=0,provenanceStatements=0,pendingReviews=0;
+  for(const id of [...affected].slice(0,100)){
+    const q=await sb.rpc("osint_refresh_divergences",{p_event:id});if(!q.error)divergences+=Number(q.data?.divergences??0);
+    const p=await sb.rpc("firewatch_refresh_statement_provenance",{p_event:id});
+    if(!p.error){provenanceStatements+=Number(p.data?.claims_upserted??0)+Number(p.data?.entities_upserted??0)+Number(p.data?.links_upserted??0);pendingReviews=Math.max(pendingReviews,Number(p.data?.pending_reviews??0))}
+  }
+  const state={status:"active",version:VERSION,last_check:new Date().toISOString(),processed,entities:entityCount,claims:claimCount,cluster_assignments:clusters,events_affected:affected.size,geo_mismatch_candidates:geoMismatch,divergences,provenance_statements:provenanceStatements,pending_reviews:pendingReviews};
   await sb.from("system_state").upsert({key:"monitor_osint_semantic",value:state,updated_at:new Date().toISOString()});
   return json({ok:true,state});
 });

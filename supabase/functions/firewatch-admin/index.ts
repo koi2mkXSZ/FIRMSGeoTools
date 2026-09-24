@@ -28,7 +28,7 @@ async function tgDocument(token:string,chatId:string,bytes:Uint8Array,fileName:s
   return d.result;
 }
 
-const panelKeyboard={inline_keyboard:[[{text:"🌐 Web Dashboard",callback_data:"admin:dashboard"}],[{text:"📊 Статус",callback_data:"admin:status"},{text:"🛰 Источники",callback_data:"admin:sources"}],[{text:"🔥 Последние события",callback_data:"admin:events"},{text:"📋 Отчёт события",callback_data:"admin:report"}],[{text:"📑 Досье события",callback_data:"admin:dossier"},{text:"🛰 Поверхность",callback_data:"admin:satellite"}],[{text:"🧠 Последнее событие",callback_data:"admin:event"},{text:"🧪 Integrity",callback_data:"admin:integrity"}],[{text:"📡 Coverage",callback_data:"admin:coverage"}],[{text:"🔎 OSINT",callback_data:"admin:osint"},{text:"🗺 Гео/инфра",callback_data:"admin:geo"}],[{text:"🌫 Наземные датчики",callback_data:"admin:ground"}],[{text:"🔎 Поиск",callback_data:"admin:search"},{text:"📈 Аналитика",callback_data:"admin:analytics"}],[{text:"👥 Клиенты",callback_data:"admin:clients"}],[{text:"🗄 Архив",callback_data:"admin:archive"},{text:"🔄 Обновить",callback_data:"admin:status"}]]};
+const panelKeyboard={inline_keyboard:[[{text:"🌐 Web Dashboard",callback_data:"admin:dashboard"}],[{text:"📊 Статус",callback_data:"admin:status"},{text:"🛰 Источники",callback_data:"admin:sources"}],[{text:"🔥 Последние события",callback_data:"admin:events"},{text:"📋 Отчёт события",callback_data:"admin:report"}],[{text:"📑 Досье события",callback_data:"admin:dossier"},{text:"🛰 Поверхность",callback_data:"admin:satellite"}],[{text:"🧠 Последнее событие",callback_data:"admin:event"},{text:"🧪 Integrity",callback_data:"admin:integrity"}],[{text:"📡 Coverage",callback_data:"admin:coverage"},{text:"🧾 Review Queue",callback_data:"admin:review"}],[{text:"🔎 OSINT",callback_data:"admin:osint"},{text:"🗺 Гео/инфра",callback_data:"admin:geo"}],[{text:"🌫 Наземные датчики",callback_data:"admin:ground"}],[{text:"🔎 Поиск",callback_data:"admin:search"},{text:"📈 Аналитика",callback_data:"admin:analytics"}],[{text:"👥 Клиенты",callback_data:"admin:clients"}],[{text:"🗄 Архив",callback_data:"admin:archive"},{text:"🔄 Обновить",callback_data:"admin:status"}]]};
 const searchKeyboard={inline_keyboard:[
   [{text:"📍 По координате и радиусу",callback_data:"admin:search_geo"}],
   [{text:"🧩 Все фильтры поиска",callback_data:"admin:search_help"}],
@@ -413,7 +413,7 @@ async function deepOsintText(sb:any,q?:string){
     .abortSignal(AbortSignal.timeout(7000));
   if(error)throw error;
   if(!data)return "🧠 Deep OSINT: событие не найдено.";
-  const e:any=data.event??{},s:any=data.summary??{},eff:any=data.effis??{},air:any=data.air_context??{},al:any=air.air_alert??{},th:any=air.public_air_threat_context??{},geo:any=data.geolocation??{},ov:any=geo.overture??{},gn:any=geo.geonames??{},vis:any=data.visual_context??{},pano:any=vis.panoramax??{},oam:any=vis.openaerialmap??{},sem:any=data.semantic??{},ss:any=sem.summary??{},src:any[]=Array.isArray(data.sources)?data.sources:[],tl:any[]=Array.isArray(data.timeline)?data.timeline:[];
+  const e:any=data.event??{},s:any=data.summary??{},eff:any=data.effis??{},air:any=data.air_context??{},al:any=air.air_alert??{},th:any=air.public_air_threat_context??{},geo:any=data.geolocation??{},ov:any=geo.overture??{},gn:any=geo.geonames??{},vis:any=data.visual_context??{},pano:any=vis.panoramax??{},oam:any=vis.openaerialmap??{},prov:any=data.provenance??{},sem:any=data.semantic??{},ss:any=sem.summary??{},src:any[]=Array.isArray(data.sources)?data.sources:[],tl:any[]=Array.isArray(data.timeline)?data.timeline:[];
   const items=Number(ss.items??0),providers=Number(ss.providers??0),classes=Number(ss.source_classes??0);
   const geoSupported=Number(ss.geo_supported??0),duplicates=Number(ss.duplicate_items??0),divergences=Number(ss.divergences??0);
   const lines=[
@@ -434,6 +434,7 @@ async function deepOsintText(sb:any,q?:string){
     `GeoNames: ${gn.status??"not_cached"} • places ${Array.isArray(gn.places)?gn.places.length:0}`,
     ...(Array.isArray(gn.places)?gn.places.slice(0,5).map((p:any)=>{const code=String(p.feature_code??"");const type=code==="PPLA"?"административный центр":code==="PPLA2"?"адм. центр уровня 2":code==="PPLA3"?"адм. центр уровня 3":code==="PPLA4"?"адм. центр уровня 4":code==="PPL"?"населённый пункт":String(p.feature_code_name??p.feature_class_name??code??"место");return `• ${p.name??p.toponym_name??"—"}${p.toponym_name&&p.toponym_name!==p.name?" ("+p.toponym_name+")":""} • ${Number.isFinite(Number(p.distance_km))?Number(p.distance_km).toFixed(1)+" км":"—"} • ${type}`;}):[]),
     `Visual: Panoramax ${Number(pano.count??0)} • OAM ${Number(oam.count??0)} • latest OAM ${oam.latest_datetime?String(oam.latest_datetime).slice(0,10):"—"}`,
+    `Provenance: statements ${Number(prov.statements??0)} • independent ${Number(prov.independent_statements??0)} • reviewed ${Number(prov.reviewed??0)} • pending ${Number(prov.pending_reviews??0)} • high ${Number(prov.high_priority_reviews??0)}`,
     ""
   ];
   if(src.length){
@@ -662,11 +663,59 @@ async function setClientStatus(sb:any,id:string,status:"active"|"blocked"){
   return data;
 }
 
+async function reviewQueueData(sb:any,eventId?:string){
+  const {data,error}=await sb.rpc("firewatch_review_queue",{p_limit:12,p_event:eventId?.trim()||null});
+  if(error)throw error;return data??{pending:0,items:[]};
+}
+function reviewQueueText(d:any){
+  const items:any[]=Array.isArray(d?.items)?d.items:[];
+  const lines=["🧾 OSINT Review Queue","Pending: "+Number(d?.pending??0),""];
+  for(const x of items.slice(0,12)){
+    const sev=x.severity==="high"?"🔴":x.severity==="medium"?"🟠":"🟡";
+    lines.push(sev+" #"+String(x.id)+" • "+String(x.reason_code??"review")+" • event #"+String(x.fire_event_id??"").slice(0,8));
+    lines.push(String(x.title??x.target_kind??"—").replace(/\s+/g," ").slice(0,180));
+    const gs=x?.context?.geo_status,score=x?.context?.geo_score;
+    if(gs)lines.push("geo "+String(gs)+(score!=null?" • "+String(score)+"/100":""));
+    lines.push("");
+  }
+  if(!items.length)lines.push("Очередь пуста.");
+  lines.push("Review — операторская проверка связи/извлечения, а не автоматическая оценка истинности.");
+  return lines.join("\n").slice(0,3900);
+}
+function reviewQueueKeyboard(d:any){
+  const items:any[]=Array.isArray(d?.items)?d.items:[];
+  const rows:any[]=[];
+  for(const x of items.slice(0,6)){
+    const id=String(x.id);
+    rows.push([{text:"✅ "+id,callback_data:"admin:review_accept:"+id},{text:"❌ "+id,callback_data:"admin:review_reject:"+id},{text:"⏳ "+id,callback_data:"admin:review_more:"+id}]);
+  }
+  rows.push([{text:"🔄 Обновить",callback_data:"admin:review"},{text:"⬅️ Панель",callback_data:"admin:status"}]);
+  return {inline_keyboard:rows};
+}
+async function reviewAction(sb:any,id:string,status:string,reviewer:string,note?:string){
+  const n=Number(id);if(!Number.isSafeInteger(n)||n<=0)throw new Error("invalid review id");
+  const {data,error}=await sb.rpc("firewatch_review_action",{p_review_id:n,p_status:status,p_reviewer:reviewer,p_note:note??null});
+  if(error)throw error;return data;
+}
+
 async function processAdminUpdate(sb:any,token:string,adminId:string,u:any){
   if(u?.callback_query){
     const q=u.callback_query;
     if(String(q?.message?.chat?.id)!==adminId)return false;
     const action=String(q.data??"").replace("admin:","");
+    if(action==="review"||action.startsWith("review_accept:")||action.startsWith("review_reject:")||action.startsWith("review_more:")){
+      try{await tg(token,"answerCallbackQuery",{callback_query_id:q.id})}catch{}
+      if(action!=="review"){
+        const [kind,id]=action.split(":");
+        const st=kind==="review_accept"?"accepted":kind==="review_reject"?"rejected":"needs_more_evidence";
+        await reviewAction(sb,id,st,"telegram:"+adminId);
+      }
+      const rd=await reviewQueueData(sb);
+      const text=reviewQueueText(rd),kb=reviewQueueKeyboard(rd);
+      try{await tg(token,"editMessageText",{chat_id:adminId,message_id:q.message.message_id,text,reply_markup:kb})}
+      catch{await tg(token,"sendMessage",{chat_id:adminId,text,reply_markup:kb})}
+      return true;
+    }
     if(action==="clients"){
       try{await tg(token,"answerCallbackQuery",{callback_query_id:q.id})}catch{}
       const rows=await clientUsers(sb);
@@ -792,6 +841,20 @@ async function processAdminUpdate(sb:any,token:string,adminId:string,u:any){
   if(low.startsWith("/analytics")){
     const arg=raw.split(/\s+/)[1]??"24";
     await tg(token,"sendMessage",{chat_id:adminId,text:await analyticsText(sb,Number(arg)),reply_markup:panelKeyboard});
+    return true;
+  }
+  if(low.startsWith("/review_accept")||low.startsWith("/review_reject")||low.startsWith("/review_more")){
+    const parts=raw.split(/\s+/),id=parts[1],note=parts.slice(2).join(" ").trim()||undefined;
+    if(!id){await tg(token,"sendMessage",{chat_id:adminId,text:"Использование: /review_accept <ID> [note] | /review_reject <ID> [note] | /review_more <ID> [note]",reply_markup:panelKeyboard});return true}
+    const st=low.startsWith("/review_accept")?"accepted":low.startsWith("/review_reject")?"rejected":"needs_more_evidence";
+    const res=await reviewAction(sb,id,st,"telegram:"+adminId,note);
+    await tg(token,"sendMessage",{chat_id:adminId,text:"Review #"+id+": "+String(res?.status??st),reply_markup:panelKeyboard});
+    return true;
+  }
+  if(low.startsWith("/review")){
+    const arg=raw.split(/\s+/).slice(1).join(" ").trim();
+    const rd=await reviewQueueData(sb,arg||undefined);
+    await tg(token,"sendMessage",{chat_id:adminId,text:reviewQueueText(rd),reply_markup:reviewQueueKeyboard(rd)});
     return true;
   }
   if(low.startsWith("/deeposint")){

@@ -99,7 +99,7 @@ async function deepOsint(sb:any,q:string){
 }
 function deepOsintText(d:any){
   if(!d)return "🧠 Deep OSINT\n\nСобытие не найдено.";
-  const e=d.event??{},s=d.summary??{},eff=d.effis??{},air=d.air_context??{},al=air.air_alert??{},th=air.public_air_threat_context??{},geo=d.geolocation??{},ov=geo.overture??{},gn=geo.geonames??{},vis=d.visual_context??{},pano=vis.panoramax??{},oam=vis.openaerialmap??{},sem=d.semantic??{},ss=sem.summary??{},src:any[]=Array.isArray(d.sources)?d.sources:[],tl:any[]=Array.isArray(d.timeline)?d.timeline:[];
+  const e=d.event??{},s=d.summary??{},eff=d.effis??{},air=d.air_context??{},al=air.air_alert??{},th=air.public_air_threat_context??{},geo=d.geolocation??{},ov=geo.overture??{},gn=geo.geonames??{},vis=d.visual_context??{},pano=vis.panoramax??{},oam=vis.openaerialmap??{},prov=d.provenance??{},sem=d.semantic??{},ss=sem.summary??{},src:any[]=Array.isArray(d.sources)?d.sources:[],tl:any[]=Array.isArray(d.timeline)?d.timeline:[];
   const items=Number(ss.items??0),providers=Number(ss.providers??0),classes=Number(ss.source_classes??0);
   const geoSupported=Number(ss.geo_supported??0),duplicates=Number(ss.duplicate_items??0),divergences=Number(ss.divergences??0);
   const corr=String(s.corroboration_level??"none");
@@ -113,6 +113,7 @@ function deepOsintText(d:any){
     "Независимое corroboration: "+corr,
     "Географическое подтверждение: "+geoSupported+"/"+items,
     "Дубликаты/пересказы: "+duplicates+" • расхождения: "+divergences,
+    "Provenance: "+Number(prov.statements??0)+" statements • review "+Number(prov.pending_reviews??0),
     ""
   ];
   if(String(eff.status??"not_cached")==="not_cached"){
