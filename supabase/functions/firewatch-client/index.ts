@@ -606,6 +606,8 @@ function regionalSearchText(d:any){
   lines.push("","Данные — инвентаризация публичных источников; полнота зависит от картографирования и актуальности источников.");
   return lines.join("\n").slice(0,3900);
 }
+function regionalErrorText(e:any){const m=e instanceof Error?e.message:String(e);if(/oblast not found/i.test(m))return "⚠️ Область не распознана.\n\nПример: /objects Киевская область АЗС\nТакже поддерживаются украинские и английские названия.";if(/unsupported category/i.test(m))return "⚠️ Категория не поддерживается.\n\nДоступно: АЗС, больницы, аптеки, школы, пожарные части, полиция, энергетика, промышленность, склады, супермаркеты, телеком, транспорт.";return "⚠️ Региональный поиск временно не выполнен.\n"+m.slice(0,240)}
+
 function areaReportText(d:any){
   const r=d?.report??{},inf=r.infrastructure??{},sum=inf.summary??{},counts=sum.by_category??{},gh=r.ghsl??{},ent=r.entities??{},es=ent.summary??{},reg=r.official_registry??{},os=r.osint??{},cov=r.coverage??{};
   const labels:any={energy:"энергетика",industrial:"промышленность",government:"административные",emergency:"экстренные службы",healthcare:"медицина",education:"образование",transport:"транспорт",logistics:"логистика",water:"вода",telecom:"телеком",commercial:"коммерция",residential:"жилые",cultural:"культура",public_service:"общественные службы",storage:"хранение"};
@@ -1171,16 +1173,20 @@ Deno.serve(async(req:Request)=>{
     if(low.startsWith("/objects_csv")){
       const q=raw.split(/\s+/).slice(1).join(" ").trim(),p=parseRegionalArgs(q);
       if(!p){await tg(token,"sendMessage",{chat_id:chatId,text:"Использование: /objects_csv <область> <категория>\nПример: /objects_csv Полтавская область АЗС",reply_markup:activeKeyboard});return json({ok:true,processed:1})}
-      const d=await regionalSearchRequest(p);await countRequest(sb,userId);
-      const csv=regionalCsv(d),name=String(d?.oblast?.code??d?.oblast_code??"region")+"-"+String(d?.category_key??p.category)+".csv";
-      await tgTextDocument(token,chatId,csv,name,"GeoWatch • "+String(d?.oblast?.name_uk??d?.oblast_name??p.oblast)+" • "+String(d?.category_label??p.category)+" • "+Number(d?.summary?.resolved_objects??0)+" объектов");
+      try{
+        const d=await regionalSearchRequest(p);await countRequest(sb,userId);
+        const csv=regionalCsv(d),name=String(d?.oblast?.code??d?.oblast_code??"region")+"-"+String(d?.category_key??p.category)+".csv";
+        await tgTextDocument(token,chatId,csv,name,"GeoWatch • "+String(d?.oblast?.name_uk??d?.oblast_name??p.oblast)+" • "+String(d?.category_label??p.category)+" • "+Number(d?.summary?.resolved_objects??0)+" объектов");
+      }catch(e){console.error("client regional csv failed:",e instanceof Error?e.message:String(e));await tg(token,"sendMessage",{chat_id:chatId,text:regionalErrorText(e),reply_markup:activeKeyboard})}
       return json({ok:true,processed:1});
     }
     if(low.startsWith("/objects")){
       const q=raw.split(/\s+/).slice(1).join(" ").trim(),p=parseRegionalArgs(q);
       if(!p){await tg(token,"sendMessage",{chat_id:chatId,text:"Использование: /objects <область> <категория>\nПример: /objects Полтавская область АЗС",reply_markup:activeKeyboard});return json({ok:true,processed:1})}
-      const d=await regionalSearchRequest(p);await countRequest(sb,userId);
-      await tg(token,"sendMessage",{chat_id:chatId,text:regionalSearchText(d),reply_markup:activeKeyboard,disable_web_page_preview:true});
+      try{
+        const d=await regionalSearchRequest(p);await countRequest(sb,userId);
+        await tg(token,"sendMessage",{chat_id:chatId,text:regionalSearchText(d),reply_markup:activeKeyboard,disable_web_page_preview:true});
+      }catch(e){console.error("client regional search failed:",e instanceof Error?e.message:String(e));await tg(token,"sendMessage",{chat_id:chatId,text:regionalErrorText(e),reply_markup:activeKeyboard})}
       return json({ok:true,processed:1});
     }
     if(low.startsWith("/infra")){
