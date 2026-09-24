@@ -65,6 +65,27 @@ for(const d of OBLAST_DEFINITIONS){
 const EXACT_CODE_BY_ALIAS=new Map<string,string|null>();
 for(const [alias,owners] of OWNER_BY_ALIAS)EXACT_CODE_BY_ALIAS.set(alias,owners.size===1?[...owners][0]:null);
 
+const REGION_SPLIT_INDEX=[
+ ...[...EXACT_CODE_BY_ALIAS.entries()].filter((x):x is [string,string]=>typeof x[1]==="string").map(([alias,code])=>({alias,code})),
+ ...OBLAST_DEFINITIONS.map(d=>({alias:normalizeRegionQuery(d.code),code:d.code}))
+].filter((x,i,a)=>a.findIndex(y=>y.alias===x.alias&&y.code===x.code)===i)
+ .sort((a,b)=>b.alias.length-a.alias.length);
+
+export function splitRegionObjectQuery(v:unknown){
+ const q=normalizeRegionQuery(v);if(!q)return null;
+ for(const x of REGION_SPLIT_INDEX){
+  if(q.startsWith(x.alias+" ")){
+   const object_query=q.slice(x.alias.length).trim();
+   if(object_query)return{oblast:x.alias,oblast_code:x.code,object_query,position:"prefix" as const};
+  }
+  if(q.endsWith(" "+x.alias)){
+   const object_query=q.slice(0,-x.alias.length).trim();
+   if(object_query)return{oblast:x.alias,oblast_code:x.code,object_query,position:"suffix" as const};
+  }
+ }
+ return null;
+}
+
 export function expandedAliases(d:OblastDefinition){return[...(EXPANDED_BY_CODE.get(d.code)??expandDefinition(d))]}
 
 export function diceSimilarity(a:unknown,b:unknown){
@@ -121,11 +142,20 @@ export function validateOblastAliases(rows:OblastRow[]){
    if(actual!==d.code)failed_resolution.push({query:alias,expected:d.code,actual});
   }
  }
+ const split_failures:{query:string;expected:string;actual:string|null}[]=[];
+ for(const d of OBLAST_DEFINITIONS){
+  for(const alias of EXPANDED_BY_CODE.get(d.code)??[]){
+   for(const q of [alias+" __generic_probe__","__generic_probe__ "+alias]){
+    const got=splitRegionObjectQuery(q)?.oblast_code??null;
+    if(got!==d.code)split_failures.push({query:q,expected:d.code,actual:got});
+   }
+  }
+ }
  return{
-  ok:missing_in_alias_map.length===0&&unknown_alias_codes.length===0&&duplicate_aliases.length===0&&failed_resolution.length===0,
+  ok:missing_in_alias_map.length===0&&unknown_alias_codes.length===0&&duplicate_aliases.length===0&&failed_resolution.length===0&&split_failures.length===0,
   db_region_count:dbCodes.length,
   alias_region_count:aliasCodes.length,
   alias_variant_count:OWNER_BY_ALIAS.size,
-  missing_in_alias_map,unknown_alias_codes,duplicate_aliases,failed_resolution
+  missing_in_alias_map,unknown_alias_codes,duplicate_aliases,failed_resolution,split_failures
  };
 }
