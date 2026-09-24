@@ -28,8 +28,8 @@ async function tgDocument(token:string,chatId:string,bytes:Uint8Array,fileName:s
   if(!r.ok||!d?.ok)throw new Error(`Telegram sendDocument: ${d?.description??r.status}`);
   return d.result;
 }
-async function tgTextDocument(token:string,chatId:string,text:string,fileName:string,caption:string){
-  const form=new FormData();form.append("chat_id",chatId);form.append("document",new Blob([text],{type:"text/csv; charset=utf-8"}),fileName);form.append("caption",caption.slice(0,900));
+async function tgTextDocument(token:string,chatId:string,text:string,fileName:string,caption:string,mime="text/csv; charset=utf-8"){
+  const form=new FormData();form.append("chat_id",chatId);form.append("document",new Blob([text],{type:mime}),fileName);form.append("caption",caption.slice(0,900));
   const r=await fetch(`https://api.telegram.org/bot${token}/sendDocument`,{method:"POST",body:form,signal:AbortSignal.timeout(30000)});const d=await r.json();
   if(!r.ok||!d?.ok)throw new Error(`Telegram sendDocument: ${d?.description??r.status}`);return d.result;
 }
@@ -698,12 +698,19 @@ async function regionalSearchRequest(payload:any){
   if(!r.ok||!d?.ok){let m=String(d?.error??("HTTP "+r.status));if(Array.isArray(d?.suggestions)&&d.suggestions.length)m+="\nВарианты: "+d.suggestions.map((x:any)=>x.label??x.key).join(" / ");throw new Error(m)}return d;
 }
 function parseRegionalArgs(v:string){const query=String(v??"").trim();return query?{query}:null}
-function regionalCsv(d:any){const cols=["No","Name","Brand","Operator","Settlement","Address","Latitude","Longitude","Sources","Source count","Resolution status","Confidence","Wikidata QID"],cell=(v:any)=>{const s=String(v??"");return /[",\n\r;]/.test(s)?'"'+s.replace(/"/g,'""')+'"':s};const rows=(Array.isArray(d?.objects)?d.objects:[]).map((x:any,i:number)=>[i+1,x.canonical_name,x.brand,x.operator,x.settlement,x.address,Number(x.latitude).toFixed(6),Number(x.longitude).toFixed(6),(Array.isArray(x.sources)?x.sources:[]).map((s:any)=>s.source+":"+s.source_id).join(" | "),x.source_count,x.resolution_status,x.resolution_confidence,x.wikidata_qid]);return "\uFEFF"+[cols,...rows].map(r=>r.map(cell).join(",")).join("\r\n")}
+function regionalCsv(d:any){
+  const cols=["No","Name","Categories","Brand","Operator","Settlement","Settlement method","Settlement distance m","Address","Address quality","Normalized location","Latitude","Longitude","Sources","Source count","Resolution status","Confidence","Wikidata QID"],cell=(v:any)=>{const s=String(v??"");return /[",\n\r;]/.test(s)?'"'+s.replace(/"/g,'""')+'"':s};
+  const rows=(Array.isArray(d?.objects)?d.objects:[]).map((x:any,i:number)=>[i+1,x.canonical_name,(x.category_keys??[]).join(" | "),x.brand,x.operator,x.settlement,x.settlement_method,x.settlement_distance_m,x.address,x.address_quality,x.normalized_location,Number(x.latitude).toFixed(6),Number(x.longitude).toFixed(6),(Array.isArray(x.sources)?x.sources:[]).map((s:any)=>s.source+":"+s.source_id).join(" | "),x.source_count,x.resolution_status,x.resolution_confidence,x.wikidata_qid]);
+  return "\uFEFF"+[cols,...rows].map(r=>r.map(cell).join(",")).join("\r\n");
+}
+function regionalGeoJson(d:any){
+  return JSON.stringify({type:"FeatureCollection",name:"GeoWatch Regional Object Search",metadata:{oblast_code:d?.oblast?.code??d?.oblast_code??null,oblast_name:d?.oblast?.name_uk??d?.oblast_name??null,category_label:d?.category_label??null,summary:d?.summary??{}},features:(Array.isArray(d?.objects)?d.objects:[]).map((x:any)=>({type:"Feature",geometry:{type:"Point",coordinates:[Number(x.longitude),Number(x.latitude)]},properties:{name:x.canonical_name??null,categories:x.category_keys??[],brand:x.brand??null,operator:x.operator??null,settlement:x.settlement??null,settlement_method:x.settlement_method??null,settlement_distance_m:x.settlement_distance_m??null,address:x.address??null,address_quality:x.address_quality??null,normalized_location:x.normalized_location??null,source_count:x.source_count??0,sources:x.sources??[],resolution_status:x.resolution_status??null,resolution_confidence:x.resolution_confidence??0,wikidata_qid:x.wikidata_qid??null}}))},null,2);
+}
 function regionalSearchText(d:any){
   const s=d?.summary??{},res=d?.resolution??s?.resolution??{},xs:any[]=Array.isArray(d?.objects)?d.objects:[],filters=res?.filters??s?.filters??{};
   const mode=res?.mode==="multi"?"multi-category":res?.mode==="generic"?"generic OSM":res?.mode==="semantic_hint"?"OSM semantic":res?.mode==="fuzzy"?"fuzzy":res?.mode==="qualified"?"category + filter":"category";
   const filterText=Object.entries(filters).filter(([,v])=>v).map(([k,v])=>k+"="+String(v)).join(" • ");
-  const lines=["🏭 REGIONAL OBJECT SEARCH",String(d?.oblast?.name_uk??d?.oblast_name??"—")+" • "+String(d?.category_label??d?.category_key??"—"),"Найдено: "+Number(s.resolved_objects??xs.length)+" • multi-source "+Number(s.multi_source??0)+" • status "+String(d?.status??"—")+(d?.cached?" • cache":" • fresh"),"Режим: "+mode+(res?.input?" • запрос: "+String(res.input):"")+(filterText?"\nФильтры: "+filterText:""),"Источники: OSM "+Number(s.osm_objects??0)+" • Overture "+Number(s.overture_objects??0)+" • Wikidata "+Number(s.wikidata_objects??0),""];
+  const lines=["🏭 REGIONAL OBJECT SEARCH",String(d?.oblast?.name_uk??d?.oblast_name??"—")+" • "+String(d?.category_label??d?.category_key??"—"),"Найдено: "+Number(s.resolved_objects??xs.length)+" • multi-source "+Number(s.multi_source??0)+" • status "+String(d?.status??"—")+(d?.cached?" • cache":" • fresh"),"Режим: "+mode+(res?.input?" • запрос: "+String(res.input):"")+(filterText?"\nФильтры: "+filterText:""),"Источники: OSM "+Number(s.osm_objects??0)+" • Overture "+Number(s.overture_objects??0)+" • Wikidata "+Number(s.wikidata_objects??0),"Адресация: tagged "+Number(s?.addressing?.settlement_direct??0)+" • inferred "+Number(s?.addressing?.settlement_inferred??0)+" • missing "+Number(s?.addressing?.settlement_missing??0),""];
   xs.slice(0,20).forEach((x:any,i:number)=>lines.push((i+1)+". "+String(x.canonical_name??"—")+(x.brand&&x.brand!==x.canonical_name?" • "+String(x.brand):"")+(x.settlement?" • "+String(x.settlement):"")+(x.address?" • "+String(x.address):"")+"\n   "+Number(x.latitude).toFixed(5)+", "+Number(x.longitude).toFixed(5)+" • "+Number(x.source_count??0)+" src • "+String(x.resolution_status??"—")));
   if(xs.length>20)lines.push("","Показаны первые 20 из "+xs.length+". Полный список: /objects_csv <область> <объект>");
   if(!xs.length)lines.push("","Совпадений в подключённых публичных данных не найдено.");
@@ -1035,7 +1042,7 @@ async function processAdminUpdate(sb:any,token:string,adminId:string,u:any){
       return true;
     }
     if(action==="objects_help"){
-      await tg(token,"sendMessage",{chat_id:adminId,text:"🏭 Объекты области\n\n/objects Полтавская область АЗС\n/objects Полтавская область нефтебаза\n/objects Київська елеватор\n/objects Львівська водонапорная башня\n\nПолный CSV:\n/objects_csv Полтавская область АЗС\n\nМожно вводить и произвольное название объекта. Примеры: нефтебаза, элеватор, водонапорная башня, карьер, насосная станция, трансформатор.",reply_markup:panelKeyboard});
+      await tg(token,"sendMessage",{chat_id:adminId,text:"🏭 Объекты области · Stage 43.1\n\nMulti:\n/objects Полтавская область АЗС + нефтебазы + резервуары\n\nФильтры:\nbrand:WOG city:Полтава operator:... address:... source:OSM confidence:90 has_address:yes\n\n/objects_count Полтавская область АЗС brand:WOG\n/objects_explain Полтавская область трансформаторные подстанции 110 кВ\n\nЭкспорт:\n/objects_csv Полтавская область АЗС\n/objects_geojson Полтавская область АЗС\n\nНаселённый пункт при отсутствии addr:city может быть spatial-inferred по ближайшему OSM place.",reply_markup:panelKeyboard});
       return true;
     }
     if(action==="nearby"){await askLocation(token,adminId);return true}
@@ -1144,6 +1151,15 @@ async function processAdminUpdate(sb:any,token:string,adminId:string,u:any){
     if(!q){await tg(token,"sendMessage",{chat_id:adminId,text:"Использование: /objects_count <область> <объект/категория> [фильтры]",reply_markup:panelKeyboard});return true}
     try{const d=await regionalSearchRequest({query:q,count_only:true});await tg(token,"sendMessage",{chat_id:adminId,text:regionalCountText(d),reply_markup:panelKeyboard})}
     catch(e){await tg(token,"sendMessage",{chat_id:adminId,text:regionalErrorText(e),reply_markup:panelKeyboard})}
+    return true
+  }
+  if(low.startsWith("/objects_geojson")){
+    const q=raw.split(/\s+/).slice(1).join(" ").trim(),p=parseRegionalArgs(q);
+    if(!p){await tg(token,"sendMessage",{chat_id:adminId,text:"Использование: /objects_geojson <область> <объект/категория> [фильтры]\nПример: /objects_geojson Полтавская область АЗС",reply_markup:panelKeyboard});return true}
+    try{
+      const d=await regionalSearchRequest(p),body=regionalGeoJson(d),name=String(d?.oblast?.code??d?.oblast_code??"region")+"-"+String(d?.category_key??"objects")+".geojson";
+      await tgTextDocument(token,adminId,body,name,"GeoWatch GeoJSON • "+String(d?.oblast?.name_uk??d?.oblast_name??q)+" • "+Number(d?.summary?.resolved_objects??0)+" объектов","application/geo+json; charset=utf-8");
+    }catch(e){console.error("admin regional geojson failed:",e instanceof Error?e.message:String(e));await tg(token,"sendMessage",{chat_id:adminId,text:regionalErrorText(e),reply_markup:panelKeyboard})}
     return true
   }
   if(low.startsWith("/objects_csv")){
@@ -1307,6 +1323,7 @@ Deno.serve(async(req:Request)=>{
         {command:"objects_count",description:"Количество объектов без списка"},
         {command:"objects_explain",description:"Показать интерпретацию запроса"},
         {command:"objects_csv",description:"CSV объектов области"},
+        {command:"objects_geojson",description:"GeoJSON объектов области"},
         {command:"analytics",description:"Сводная аналитика 24/168/720 ч"},
         {command:"priority",description:"События по приоритету"},
         {command:"deeposint",description:"Глубокая OSINT-корреляция"},
