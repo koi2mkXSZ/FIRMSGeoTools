@@ -413,7 +413,7 @@ async function deepOsintText(sb:any,q?:string){
     .abortSignal(AbortSignal.timeout(7000));
   if(error)throw error;
   if(!data)return "🧠 Deep OSINT: событие не найдено.";
-  const e:any=data.event??{},s:any=data.summary??{},eff:any=data.effis??{},air:any=data.air_context??{},al:any=air.air_alert??{},th:any=air.public_air_threat_context??{},geo:any=data.geolocation??{},ov:any=geo.overture??{},gn:any=geo.geonames??{},sem:any=data.semantic??{},ss:any=sem.summary??{},src:any[]=Array.isArray(data.sources)?data.sources:[],tl:any[]=Array.isArray(data.timeline)?data.timeline:[];
+  const e:any=data.event??{},s:any=data.summary??{},eff:any=data.effis??{},air:any=data.air_context??{},al:any=air.air_alert??{},th:any=air.public_air_threat_context??{},geo:any=data.geolocation??{},ov:any=geo.overture??{},gn:any=geo.geonames??{},vis:any=data.visual_context??{},pano:any=vis.panoramax??{},oam:any=vis.openaerialmap??{},sem:any=data.semantic??{},ss:any=sem.summary??{},src:any[]=Array.isArray(data.sources)?data.sources:[],tl:any[]=Array.isArray(data.timeline)?data.timeline:[];
   const items=Number(ss.items??0),providers=Number(ss.providers??0),classes=Number(ss.source_classes??0);
   const geoSupported=Number(ss.geo_supported??0),duplicates=Number(ss.duplicate_items??0),divergences=Number(ss.divergences??0);
   const lines=[
@@ -433,6 +433,7 @@ async function deepOsintText(sb:any,q?:string){
     `Geolocation: Overture ${ov.status??"not_cached"} • release ${ov.release??"—"} • tiles ${Number(ov.tiles_ok??0)}/${Number(ov.tiles_total??0)} • places ${Array.isArray(ov.places)?ov.places.length:0}`,
     `GeoNames: ${gn.status??"not_cached"} • places ${Array.isArray(gn.places)?gn.places.length:0}`,
     ...(Array.isArray(gn.places)?gn.places.slice(0,5).map((p:any)=>{const code=String(p.feature_code??"");const type=code==="PPLA"?"административный центр":code==="PPLA2"?"адм. центр уровня 2":code==="PPLA3"?"адм. центр уровня 3":code==="PPLA4"?"адм. центр уровня 4":code==="PPL"?"населённый пункт":String(p.feature_code_name??p.feature_class_name??code??"место");return `• ${p.name??p.toponym_name??"—"}${p.toponym_name&&p.toponym_name!==p.name?" ("+p.toponym_name+")":""} • ${Number.isFinite(Number(p.distance_km))?Number(p.distance_km).toFixed(1)+" км":"—"} • ${type}`;}):[]),
+    `Visual: Panoramax ${Number(pano.count??0)} • OAM ${Number(oam.count??0)} • latest OAM ${oam.latest_datetime?String(oam.latest_datetime).slice(0,10):"—"}`,
     ""
   ];
   if(src.length){

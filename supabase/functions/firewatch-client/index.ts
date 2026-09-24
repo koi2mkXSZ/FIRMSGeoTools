@@ -99,7 +99,7 @@ async function deepOsint(sb:any,q:string){
 }
 function deepOsintText(d:any){
   if(!d)return "🧠 Deep OSINT\n\nСобытие не найдено.";
-  const e=d.event??{},s=d.summary??{},eff=d.effis??{},air=d.air_context??{},al=air.air_alert??{},th=air.public_air_threat_context??{},geo=d.geolocation??{},ov=geo.overture??{},gn=geo.geonames??{},sem=d.semantic??{},ss=sem.summary??{},src:any[]=Array.isArray(d.sources)?d.sources:[],tl:any[]=Array.isArray(d.timeline)?d.timeline:[];
+  const e=d.event??{},s=d.summary??{},eff=d.effis??{},air=d.air_context??{},al=air.air_alert??{},th=air.public_air_threat_context??{},geo=d.geolocation??{},ov=geo.overture??{},gn=geo.geonames??{},vis=d.visual_context??{},pano=vis.panoramax??{},oam=vis.openaerialmap??{},sem=d.semantic??{},ss=sem.summary??{},src:any[]=Array.isArray(d.sources)?d.sources:[],tl:any[]=Array.isArray(d.timeline)?d.timeline:[];
   const items=Number(ss.items??0),providers=Number(ss.providers??0),classes=Number(ss.source_classes??0);
   const geoSupported=Number(ss.geo_supported??0),duplicates=Number(ss.duplicate_items??0),divergences=Number(ss.divergences??0);
   const corr=String(s.corroboration_level??"none");
@@ -158,6 +158,14 @@ function deepOsintText(d:any){
       const type=code==="PPLA"?"административный центр":code==="PPLA2"?"адм. центр уровня 2":code==="PPLA3"?"адм. центр уровня 3":code==="PPLA4"?"адм. центр уровня 4":code==="PPL"?"населённый пункт":String(p.feature_code_name??p.feature_class_name??code??"место");
       lines.push("• "+nm+canonical+" • "+dist+" • "+type);
     }
+  }
+  lines.push("");
+  lines.push("🖼 Визуальный контекст");
+  if(String(vis.status??"not_cached")==="not_cached"){
+    lines.push("Panoramax/OAM: ещё не закэшировано");
+  }else{
+    lines.push("Panoramax: "+Number(pano.count??0)+(pano.nearest_distance_m!=null?" • ближайший "+Math.round(Number(pano.nearest_distance_m))+" м":""));
+    lines.push("OpenAerialMap: "+Number(oam.count??0)+(oam.latest_datetime?" • последний "+String(oam.latest_datetime).slice(0,10):""));
   }
   lines.push("");
 
