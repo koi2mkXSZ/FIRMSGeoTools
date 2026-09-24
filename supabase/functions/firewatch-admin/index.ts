@@ -719,6 +719,35 @@ function areaIntelText(d:any){
   return lines.join("\n").slice(0,3900);
 }
 
+async function registryFusionRequest(query:string){
+  const u=Deno.env.get("SUPABASE_URL"),k=Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
+  if(!u||!k)throw new Error("missing Supabase env");
+  const r=await fetch(u+"/functions/v1/firewatch-registry-fusion",{
+    method:"POST",headers:{"content-type":"application/json","authorization":"Bearer "+k},
+    body:JSON.stringify({query}),signal:AbortSignal.timeout(30000)
+  });
+  const t=await r.text();let d:any;try{d=JSON.parse(t)}catch{throw new Error("Registry Fusion invalid response")}
+  if(!r.ok||!d?.ok)throw new Error(String(d?.error??("HTTP "+r.status)));return d;
+}
+function registryFusionText(d:any){
+  const e=d?.entity??{},hits:any[]=Array.isArray(d?.hits)?d.hits:[],lines=[
+    "🏛 OFFICIAL / REGISTRY #"+String(e.id??"").slice(0,8),
+    String(e.canonical_name??"—"),
+    "Источниковых совпадений: "+hits.length
+  ];
+  if(!hits.length)lines.push("","Подтверждённых или достаточно сильных официальных registry hits не найдено.");
+  else{
+    lines.push("");
+    for(const h of hits.slice(0,10)){
+      lines.push("• "+String(h.source_key??"—")+" • "+String(h.match_status??"candidate")+" • "+Number(h.match_confidence??0)+"/100");
+      if(h.title)lines.push("  "+String(h.title).replace(/\s+/g," ").slice(0,220));
+      if(h.publisher)lines.push("  publisher: "+String(h.publisher).slice(0,160));
+      if(h.landing_url)lines.push("  "+String(h.landing_url));
+    }
+  }
+  lines.push("","Registry hit — это ссылка на официальный источник, а не автоматическое доказательство связи с событием.");
+  return lines.join("\n").slice(0,3900);
+}
 async function entityProfileRequest(query:string){
   const u=Deno.env.get("SUPABASE_URL"),k=Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
   if(!u||!k)throw new Error("missing Supabase env");
@@ -994,6 +1023,12 @@ async function processAdminUpdate(sb:any,token:string,adminId:string,u:any){
     const arg=raw.split(/\s+/)[1]??"24";
     await tg(token,"sendMessage",{chat_id:adminId,text:await analyticsText(sb,Number(arg)),reply_markup:panelKeyboard});
     return true;
+  }
+  if(low.startsWith("/registry")){
+    const q=raw.split(/\s+/).slice(1).join(" ").trim();
+    if(!q){await tg(token,"sendMessage",{chat_id:adminId,text:"Использование: /registry <QID|entity-id>\nПример: /registry 3717e647",reply_markup:panelKeyboard});return true}
+    const d=await registryFusionRequest(q);
+    await tg(token,"sendMessage",{chat_id:adminId,text:registryFusionText(d),reply_markup:panelKeyboard,disable_web_page_preview:true});return true
   }
   if(low.startsWith("/entity")){
     const q=raw.split(/\s+/).slice(1).join(" ").trim();

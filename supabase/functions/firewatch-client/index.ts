@@ -574,6 +574,35 @@ function areaIntelText(d:any){
   lines.push("","Контекст описательный: без vulnerability/target/access-route scoring.");
   return lines.join("\n").slice(0,3900);
 }
+async function registryFusionRequest(query:string){
+  const u=Deno.env.get("SUPABASE_URL"),k=Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
+  if(!u||!k)throw new Error("missing Supabase env");
+  const r=await fetch(u+"/functions/v1/firewatch-registry-fusion",{
+    method:"POST",headers:{"content-type":"application/json","authorization":"Bearer "+k},
+    body:JSON.stringify({query}),signal:AbortSignal.timeout(30000)
+  });
+  const t=await r.text();let d:any;try{d=JSON.parse(t)}catch{throw new Error("Registry Fusion invalid response")}
+  if(!r.ok||!d?.ok)throw new Error(String(d?.error??("HTTP "+r.status)));return d;
+}
+function registryFusionText(d:any){
+  const e=d?.entity??{},hits:any[]=Array.isArray(d?.hits)?d.hits:[],lines=[
+    "🏛 OFFICIAL / REGISTRY #"+String(e.id??"").slice(0,8),
+    String(e.canonical_name??"—"),
+    "Источниковых совпадений: "+hits.length
+  ];
+  if(!hits.length)lines.push("","Подтверждённых или достаточно сильных официальных registry hits не найдено.");
+  else{
+    lines.push("");
+    for(const h of hits.slice(0,10)){
+      lines.push("• "+String(h.source_key??"—")+" • "+String(h.match_status??"candidate")+" • "+Number(h.match_confidence??0)+"/100");
+      if(h.title)lines.push("  "+String(h.title).replace(/\s+/g," ").slice(0,220));
+      if(h.publisher)lines.push("  publisher: "+String(h.publisher).slice(0,160));
+      if(h.landing_url)lines.push("  "+String(h.landing_url));
+    }
+  }
+  lines.push("","Registry hit — это ссылка на официальный источник, а не автоматическое доказательство связи с событием.");
+  return lines.join("\n").slice(0,3900);
+}
 async function entityProfileRequest(query:string){
   const u=Deno.env.get("SUPABASE_URL"),k=Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
   if(!u||!k)throw new Error("missing Supabase env");
@@ -882,7 +911,7 @@ Deno.serve(async(req:Request)=>{
     }
 
     if(low==="🔎 поиск"){
-      await tg(token,"sendMessage",{chat_id:chatId,text:["🔎 Поиск","","По ID:","/search aee43b0d","","По региону:","/search Київська","","По координатам и радиусу:","/nearby 50.4501 30.5234 25","/nearby 50.4501, 30.5234, 25","/nearby 50.4501; 30.5234; 25","","История до 365 дней:","/history 50.4501 30.5234 5","","Area OSINT:","/area 46.61212 31.55511 2000","/infra 19be809d 2000","/entity Q30017836","","OSINT layers:","/osint 19be809d","/ground 19be809d","/satellite 19be809d","/latency 19be809d","","System read-only:","/events • /sources • /coverage • /integrity • /archive","","Координаты вводятся вручную. Передача геопозиции Telegram отключена."].join("\n"),reply_markup:activeKeyboard});
+      await tg(token,"sendMessage",{chat_id:chatId,text:["🔎 Поиск","","По ID:","/search aee43b0d","","По региону:","/search Київська","","По координатам и радиусу:","/nearby 50.4501 30.5234 25","/nearby 50.4501, 30.5234, 25","/nearby 50.4501; 30.5234; 25","","История до 365 дней:","/history 50.4501 30.5234 5","","Area OSINT:","/area 46.61212 31.55511 2000","/infra 19be809d 2000","/entity Q30017836","/registry 3717e647","","OSINT layers:","/osint 19be809d","/ground 19be809d","/satellite 19be809d","/latency 19be809d","","System read-only:","/events • /sources • /coverage • /integrity • /archive","","Координаты вводятся вручную. Передача геопозиции Telegram отключена."].join("\n"),reply_markup:activeKeyboard});
       return json({ok:true,processed:1});
     }
 
@@ -1042,6 +1071,12 @@ Deno.serve(async(req:Request)=>{
       const d=await areaIntelRequest({lat,lon,radius_m:radius});await countRequest(sb,userId);
       await tg(token,"sendMessage",{chat_id:chatId,text:areaIntelText(d),reply_markup:activeKeyboard,disable_web_page_preview:true});
       return json({ok:true,processed:1});
+    }
+    if(low.startsWith("/registry")){
+      const q=raw.split(/\s+/).slice(1).join(" ").trim();
+      if(!q){await tg(token,"sendMessage",{chat_id:chatId,text:"Использование: /registry <QID|entity-id>\nПример: /registry 3717e647",reply_markup:activeKeyboard});return json({ok:true,processed:1})}
+      const d=await registryFusionRequest(q);await countRequest(sb,userId);
+      await tg(token,"sendMessage",{chat_id:chatId,text:registryFusionText(d),reply_markup:activeKeyboard,disable_web_page_preview:true});return json({ok:true,processed:1});
     }
     if(low.startsWith("/entity")){
       const q=raw.split(/\s+/).slice(1).join(" ").trim();
