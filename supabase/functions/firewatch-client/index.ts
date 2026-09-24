@@ -574,7 +574,7 @@ function regionalGeoJson(d:any){
   return JSON.stringify({type:"FeatureCollection",name:"GeoWatch Regional Object Search",metadata:{oblast_code:d?.oblast?.code??d?.oblast_code??null,oblast_name:d?.oblast?.name_uk??d?.oblast_name??null,category_label:d?.category_label??null,summary:d?.summary??{}},features:(Array.isArray(d?.objects)?d.objects:[]).map((x:any)=>({type:"Feature",geometry:{type:"Point",coordinates:[Number(x.longitude),Number(x.latitude)]},properties:{name:x.canonical_name??null,categories:x.category_keys??[],brand:x.brand??null,operator:x.operator??null,settlement:x.settlement??null,settlement_method:x.settlement_method??null,settlement_distance_m:x.settlement_distance_m??null,address:x.address??null,address_quality:x.address_quality??null,normalized_location:x.normalized_location??null,source_count:x.source_count??0,sources:x.sources??[],resolution_status:x.resolution_status??null,resolution_confidence:x.resolution_confidence??0,wikidata_qid:x.wikidata_qid??null}}))},null,2);
 }
 function regionalSearchText(d:any){
-  const s=d?.summary??{},res=d?.resolution??s?.resolution??{},xs:any[]=Array.isArray(d?.objects)?d.objects:[],filters=res?.filters??s?.filters??{};
+  const s=d?.summary??{},res=d?.resolution??s?.resolution??{},xs:any[]=Array.isArray(d?.objects)?d.objects:[],filters=res?.filters??s?.filters??{},sf=s?.settlement_filter??null;
   const mode=res?.mode==="multi"?"multi-category":res?.mode==="generic"?"generic OSM":res?.mode==="semantic_hint"?"OSM semantic":res?.mode==="fuzzy"?"fuzzy":res?.mode==="qualified"?"category + filter":"category";
   const filterText=Object.entries(filters).filter(([,v])=>v).map(([k,v])=>k+"="+String(v)).join(" • ");
   const lines=[
@@ -586,6 +586,7 @@ function regionalSearchText(d:any){
     "Адресация: tagged "+Number(s?.addressing?.settlement_direct??0)+" • inferred "+Number(s?.addressing?.settlement_inferred??0)+" • missing "+Number(s?.addressing?.settlement_missing??0),
     ""
   ];
+  if(sf)lines.splice(lines.length-1,0,"Нас. пункт: "+(sf.mode==="radius_fallback"?"≈ "+String(sf.target??sf.query??"—")+" • радиус "+(Number(sf.radius_m??0)/1000).toFixed(1)+" км":"enriched-name "+String(sf.query??"—"))+" • не административная граница");
   xs.slice(0,20).forEach((x:any,i:number)=>lines.push((i+1)+". "+String(x.canonical_name??"—")+(x.brand&&x.brand!==x.canonical_name?" • "+String(x.brand):"")+(x.settlement?" • "+String(x.settlement):"")+(x.address?" • "+String(x.address):"")+"\n   "+Number(x.latitude).toFixed(5)+", "+Number(x.longitude).toFixed(5)+" • "+Number(x.source_count??0)+" src • "+String(x.resolution_status??"—")));
   if(xs.length>20)lines.push("","Показаны первые 20 из "+xs.length+". Полный список: /objects_csv <область> <объект>");
   if(!xs.length)lines.push("","Совпадений в подключённых публичных данных не найдено.");
@@ -595,9 +596,9 @@ function regionalSearchText(d:any){
   return lines.join("\n").slice(0,3900);
 }
 function regionalCountText(d:any){
-  const s=d?.summary??{},r=d?.resolution??s?.resolution??{},f=r?.filters??s?.filters??{};
+  const s=d?.summary??{},r=d?.resolution??s?.resolution??{},f=r?.filters??s?.filters??{},sf=s?.settlement_filter??null;
   const fs=Object.entries(f).filter(([,v])=>v).map(([k,v])=>k+"="+String(v)).join(" • ");
-  return ["🔢 REGIONAL OBJECT COUNT",String(d?.oblast?.name_uk??d?.oblast_name??"—")+" • "+String(d?.category_label??d?.category_key??"—"),"Найдено: "+Number(s.resolved_objects??0)+" • status "+String(d?.status??"—")+(d?.cached?" • cache":" • fresh"),"Режим: "+String(r?.mode??"—")+(fs?"\nФильтры: "+fs:""),"OSM candidates: "+Number(s.osm_objects??0)+(s.truncated?" • ⚠️ truncated":"")].join("\n").slice(0,3900);
+  return ["🔢 REGIONAL OBJECT COUNT",String(d?.oblast?.name_uk??d?.oblast_name??"—")+" • "+String(d?.category_label??d?.category_key??"—"),"Найдено: "+Number(s.resolved_objects??0)+" • status "+String(d?.status??"—")+(d?.cached?" • cache":" • fresh"),"Режим: "+String(r?.mode??"—")+(fs?"\nФильтры: "+fs:""),sf?"Нас. пункт: "+(sf.mode==="radius_fallback"?"≈ "+String(sf.target??sf.query??"—")+" • радиус "+(Number(sf.radius_m??0)/1000).toFixed(1)+" км":"enriched-name "+String(sf.query??"—"))+" • не административная граница":null,"OSM candidates: "+Number(s.osm_objects??0)+(s.truncated?" • ⚠️ truncated":"")].filter(Boolean).join("\n").slice(0,3900);
 }
 function regionalExplainText(d:any){
   const r=d?.resolution??{},cats=Array.isArray(r.categories)?r.categories:[],f=r.filters??{},sp=d?.source_plan??{};
