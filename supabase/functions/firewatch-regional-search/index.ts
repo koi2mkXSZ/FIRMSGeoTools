@@ -1,5 +1,6 @@
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "@supabase/supabase-js";
+import { diceSimilarity as dice, normalizeRegionQuery as norm, resolveOblastRow, validateOblastAliases } from "./region_aliases.ts";
 
 const POSTPASS="https://postpass.geofabrik.de/api/interpreter";
 const FUSED="https://www.fused.io/server/v1/realtime-shared/UDF_Overture_Maps_Example/run/tiles";
@@ -23,41 +24,9 @@ const SPECS:Spec[]=[
  {key:"telecom",label:"Телеком-инфраструктура",aliases:["телеком","вышки связи","вежі зв'язку","telecom","communications tower"],osm:"(tags ? 'telecom' OR tags->>'office'='telecommunication' OR tags->>'tower:type'='communication' OR tags->>'man_made' IN ('mast','communications_tower','antenna'))",overture:["telecom","communication","communications tower","communications_tower"],overtureTypes:["infrastructure","place"]},
  {key:"transport",label:"Транспортные узлы",aliases:["транспорт","transport","станции","станції"],osm:"(tags->>'railway' IN ('station','halt','yard','terminal') OR tags->>'amenity'='bus_station' OR tags->>'aeroway' IN ('aerodrome','terminal') OR tags->>'harbour'='yes' OR tags->>'seamark:type'='harbour')",overture:["station","terminal","airport","harbour","harbor","transport"],overtureTypes:["place","infrastructure"]}
 ];
-const OBLAST_ALIASES:Record<string,string[]>={
- "UA01":["автономна республіка крим","автономная республика крым","крим","крым","crimea","autonomous republic of crimea"],
- "UA05":["вінницька","винницкая","винницкая область","vinnytska","vinnitsa","vinnytsia"],
- "UA07":["волинська","волынская","volynska","volyn"],
- "UA12":["дніпропетровська","днепропетровская","dnipropetrovska","dnepropetrovsk"],
- "UA14":["донецька","донецкая","donetska","donetsk"],
- "UA18":["житомирська","житомирская","zhytomyrska","zhitomir"],
- "UA21":["закарпатська","закарпатская","zakarpatska","transcarpathia"],
- "UA23":["запорізька","запорожская","zaporizka","zaporozhye"],
- "UA26":["івано франківська","ивано франковская","ivano frankivska","ivano frankivsk"],
- "UA80":["київ","киев","kyiv","kiev"],
- "UA32":["київська","киевская","киевская область","kyivska","kyiv region","kiev region"],
- "UA35":["кіровоградська","кировоградская","kirovohradska","kirovograd"],
- "UA44":["луганська","луганская","luhanska","lugansk"],
- "UA46":["львівська","львовская","lvivska","lviv"],
- "UA48":["миколаївська","николаевская","mykolaivska","nikolaev"],
- "UA51":["одеська","одесская","odeska","odessa"],
- "UA53":["полтавська","полтавская","poltavska","poltava"],
- "UA56":["рівненська","ровенская","rivnenska","rivne"],
- "UA85":["севастополь","sevastopol"],
- "UA59":["сумська","сумская","sumska","sumy"],
- "UA61":["тернопільська","тернопольская","ternopilska","ternopil"],
- "UA63":["харківська","харьковская","kharkivska","kharkiv","kharkov"],
- "UA65":["херсонська","херсонская","khersonska","kherson"],
- "UA68":["хмельницька","хмельницкая","khmelnytska","khmelnytskyi"],
- "UA71":["черкаська","черкасская","cherkaska","cherkasy"],
- "UA73":["чернівецька","черновицкая","chernivetska","chernivtsi"],
- "UA74":["чернігівська","черниговская","chernihivska","chernihiv","chernigov"]
-};
-
 
 function json(x:unknown,s=200){return new Response(JSON.stringify(x,null,2),{status:s,headers:{"content-type":"application/json; charset=utf-8","cache-control":"no-store"}})}
 function errText(e:any){return e instanceof Error?e.message:(e&&typeof e==="object"?JSON.stringify({code:e.code,message:e.message,details:e.details,hint:e.hint}):String(e))}
-function norm(v:any){return String(v??"").normalize("NFKD").toLowerCase().replace(/[\u0300-\u036f]/g,"").replace(/['’\u02bc"]/g,"").replace(/[^\p{L}\p{N}]+/gu," ").split(/\s+/).filter((x:string)=>x&&!["область","області","областю","обл","region","oblast"].includes(x)).join(" ").trim()}
-function dice(a:any,b:any){const x=norm(a),y=norm(b);if(!x||!y)return 0;if(x===y)return 1;if(x.includes(y)||y.includes(x))return .94;const bg=(s:string)=>{const m=new Map<string,number>();for(let i=0;i<s.length-1;i++){const q=s.slice(i,i+2);m.set(q,(m.get(q)??0)+1)}return m};const A=bg(x),B=bg(y);let i=0,na=0,nb=0;for(const v of A.values())na+=v;for(const v of B.values())nb+=v;for(const [k,v] of A)i+=Math.min(v,B.get(k)??0);return na+nb?2*i/(na+nb):0}
 function specFor(v:any){const q=norm(v);return SPECS.find(s=>s.key===q||s.aliases.some(a=>norm(a)===q))??null}
 function hav(a:number,b:number,c:number,d:number){const p=Math.PI/180,R=6371000,da=(c-a)*p,db=(d-b)*p,x=Math.sin(da/2)**2+Math.cos(a*p)*Math.cos(c*p)*Math.sin(db/2)**2;return 2*R*Math.asin(Math.min(1,Math.sqrt(x)))}
 function tileXY(lat:number,lon:number,z:number){const n=2**z,x=Math.floor((lon+180)/360*n),lr=lat*Math.PI/180,y=Math.floor((1-Math.asinh(Math.tan(lr))/Math.PI)/2*n);return{x,y}}
@@ -100,7 +69,8 @@ function generic(v:any,s:Spec){const x=norm(v);return !x||new Set([norm(s.label)
 function resolve(rows:any[],s:Spec){const rank=(x:string)=>x==="OpenStreetMap"?3:x==="Wikidata"?2:1;rows=[...rows].sort((a,b)=>rank(b.source)-rank(a.source));const entities:any[]=[];const qmap=new Map<string,any>();const add=(e:any,r:any,method:string,confidence:number)=>{e.sources.push({source:r.source,source_id:r.source_id,name:r.name,match_method:method,match_confidence:confidence,url:sourceUrl(r.source,r.source_id,r.wikidata_qid),wikidata_qid:r.wikidata_qid??null});if(!e.wikidata_qid&&r.wikidata_qid){e.wikidata_qid=r.wikidata_qid;qmap.set(r.wikidata_qid,e)}if(!e.address&&r.address)e.address=r.address;if(!e.settlement&&r.settlement)e.settlement=r.settlement;if(!e.brand&&r.brand)e.brand=r.brand;if(!e.operator&&r.operator)e.operator=r.operator;e.resolution_status=e.sources.length>1?(method==="exact_wikidata_qid"?"auto_exact":"auto_probable"):"single_source";e.resolution_confidence=Math.min(e.resolution_confidence,confidence)};for(const r of rows){if(r.wikidata_qid&&qmap.has(r.wikidata_qid)){add(qmap.get(r.wikidata_qid),r,"exact_wikidata_qid",100);continue}let best:any=null;for(const e of entities){if(e.sources.some((x:any)=>x.source===r.source))continue;const d=hav(e.latitude,e.longitude,r.latitude,r.longitude),sim=generic(e.canonical_name,s)||generic(r.name,s)?0:dice(e.canonical_name,r.name);let conf=Math.round(sim*78+Math.max(0,1-d/60)*22);if((sim>=.86&&d<=45)||(sim>=.72&&d<=20))conf=Math.max(conf,87);if(conf>=86&&(!best||conf>best.conf))best={e,conf}}if(best){add(best.e,r,"name_distance",best.conf);continue}const e={canonical_name:r.name,latitude:r.latitude,longitude:r.longitude,wikidata_qid:r.wikidata_qid??null,brand:r.brand??null,operator:r.operator??null,settlement:r.settlement??null,address:r.address??null,resolution_status:"single_source",resolution_confidence:100,sources:[] as any[]};entities.push(e);if(e.wikidata_qid)qmap.set(e.wikidata_qid,e);add(e,r,"single_source",100)}for(const e of entities){const osm=e.sources.find((x:any)=>x.source==="OpenStreetMap"),ot=e.sources.find((x:any)=>x.source==="Overture"),wd=e.sources.find((x:any)=>x.source==="Wikidata");e.canonical_name=osm?.name??ot?.name??wd?.name??e.canonical_name;e.source_count=new Set(e.sources.map((x:any)=>x.source)).size}return entities}
 function csvCell(v:any){const s=String(v??"");return /[",\n\r;]/.test(s)?'"'+s.replace(/"/g,'""')+'"':s}
 function toCsv(objects:any[]){const head=["No","Name","Brand","Operator","Settlement","Address","Latitude","Longitude","Sources","Source count","Resolution status","Confidence","Wikidata QID"];const rows=objects.map((x,i)=>[i+1,x.canonical_name,x.brand,x.operator,x.settlement,x.address,Number(x.latitude).toFixed(6),Number(x.longitude).toFixed(6),x.sources.map((s:any)=>s.source+":"+s.source_id).join(" | "),x.source_count,x.resolution_status,x.resolution_confidence,x.wikidata_qid]);return[head,...rows].map(r=>r.map(csvCell).join(",")).join("\r\n")}
-async function resolveOblast(sb:any,q:any){const {data,error}=await sb.from("oblasts").select("id,code,name_uk,name_en");if(error)throw error;const raw=String(q??"").trim(),n=norm(raw);if(!n)return null;let best:any=null;for(const o of data??[]){const aliases=OBLAST_ALIASES[String(o.code)]??[],exact=aliases.some(a=>norm(a)===n)?1:0;const aliasScore=aliases.reduce((m,a)=>Math.max(m,dice(n,a)),0);const scores=[String(o.code).toLowerCase()===raw.toLowerCase()?1:0,exact,dice(n,o.name_uk),dice(n,o.name_en),aliasScore];const score=Math.max(...scores);if(!best||score>best.score)best={...o,score}}if(!best||best.score<.48)return null;const {data:g,error:ge}=await sb.rpc("firewatch_oblast_geometry",{p_oblast_id:best.id});if(ge)throw ge;return{...best,...g}}
+async function oblastRows(sb:any){const {data,error}=await sb.from("oblasts").select("id,code,name_uk,name_en");if(error)throw error;return data??[]}
+async function resolveOblast(sb:any,q:any){const rows=await oblastRows(sb),best=resolveOblastRow(rows,q);if(!best)return null;const {data:g,error:ge}=await sb.rpc("firewatch_oblast_geometry",{p_oblast_id:best.id});if(ge)throw ge;return{...best,...g}}
 
 Deno.serve(async(req:Request)=>{
  try{
@@ -108,7 +78,9 @@ Deno.serve(async(req:Request)=>{
   const base=Deno.env.get("SUPABASE_URL"),key=Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");if(!base||!key)return json({ok:false,error:"missing env"},500);
   const sb=createClient(base,key,{auth:{persistSession:false}}),bearer=req.headers.get("authorization")??"",cron=req.headers.get("x-cron-secret")??"";
   let authorized=bearer==="Bearer "+key;if(!authorized&&cron){const {data}=await sb.rpc("verify_firewatch_cron_secret",{p_secret:cron});authorized=data===true}if(!authorized)return json({ok:false,error:"unauthorized"},401);
-  const body:any=await req.json().catch(()=>({})),spec=specFor(body.category);
+  const body:any=await req.json().catch(()=>({}));
+  if(body.self_test==="oblast_aliases"){const report=validateOblastAliases(await oblastRows(sb));return json({ok:report.ok,self_test:"oblast_aliases",...report},report.ok?200:500)}
+  const spec=specFor(body.category);
   if(!spec)return json({ok:false,error:"unsupported category",supported:SPECS.map(x=>({key:x.key,label:x.label}))},400);
   const oblast=await resolveOblast(sb,body.oblast);if(!oblast)return json({ok:false,error:"oblast not found"},404);
   const queryKey=String(oblast.code)+":"+spec.key;
