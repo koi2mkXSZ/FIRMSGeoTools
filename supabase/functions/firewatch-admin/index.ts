@@ -719,6 +719,43 @@ function regionalErrorText(e:any){
   return "⚠️ Региональный поиск временно не выполнен.\n"+m.slice(0,500);
 }
 
+function areaReportText(d:any){
+  const r=d?.report??{},inf=r.infrastructure??{},sum=inf.summary??{},counts=sum.by_category??{},gh=r.ghsl??{},ent=r.entities??{},es=ent.summary??{},reg=r.official_registry??{},os=r.osint??{},cov=r.coverage??{};
+  const labels:any={energy:"энергетика",industrial:"промышленность",government:"административные",emergency:"экстренные службы",healthcare:"медицина",education:"образование",transport:"транспорт",logistics:"логистика",water:"вода",telecom:"телеком",commercial:"коммерция",residential:"жилые",cultural:"культура",public_service:"общественные службы",storage:"хранение"};
+  const order=["energy","industrial","government","emergency","healthcare","education","transport","logistics","water","telecom","commercial","residential","cultural","public_service","storage"];
+  const lines=[
+    "🧭 AREA OSINT REPORT",
+    "Центр: "+Number(d.latitude).toFixed(5)+", "+Number(d.longitude).toFixed(5)+" • радиус "+Number(d.radius_m)+" м"+(d.event_id?" • event #"+String(d.event_id).slice(0,8):""),
+    "Coverage: "+Number(cov.active??0)+"/"+Number(cov.total??0)+" sources • status "+String(d.status??"—"),
+    "",
+    "🏗 Инфраструктура"
+  ];
+  for(const k of order)if(Number(counts[k]??0)>0)lines.push("• "+(labels[k]??k)+": "+Number(counts[k]));
+  const b=inf.buildings??{};lines.push("• building footprints: "+Number(b.building_count??0)+" • non-residential tagged "+Number(b.nonresidential_tagged_count??0));
+  if(r.ghsl){
+    lines.push("","👥 GHSL exposure • epoch "+String(gh.epoch??2025));
+    lines.push("• population: 1 км ~"+Math.round(Number(gh.population_1km??0)).toLocaleString("ru-RU")+" • 5 км ~"+Math.round(Number(gh.population_5km??0)).toLocaleString("ru-RU")+" • 10 км ~"+Math.round(Number(gh.population_10km??0)).toLocaleString("ru-RU"));
+    lines.push("• built fraction: 1 км "+Number(gh.built_fraction_1km_pct??0).toFixed(2)+"% • 5 км "+Number(gh.built_fraction_5km_pct??0).toFixed(2)+"% • 10 км "+Number(gh.built_fraction_10km_pct??0).toFixed(2)+"%");
+  }
+  lines.push("","🔗 Entity graph");
+  lines.push("• entities "+Number(es.entities??0)+" • multi-source "+Number(es.multi_source??0)+" • Wikidata "+Number(es.wikidata_entities??0)+" • review "+Number(es.pending_proposals??0));
+  const tops:any[]=Array.isArray(ent.top)?ent.top:[];
+  for(const x of tops.slice(0,6))lines.push("• #"+String(x.id??"").slice(0,8)+" "+String(x.canonical_name??"—")+" • "+String(x.category??"—")+" • "+Number(x.source_count??0)+" src"+(x.wikidata_qid?" • "+String(x.wikidata_qid):""));
+  lines.push("","🏛 Official / registry");
+  lines.push("• hits "+Number(reg.hit_count??0)+" • confirmed "+Number(reg.confirmed??0)+" • probable "+Number(reg.probable??0));
+  const rh:any[]=Array.isArray(reg.hits)?reg.hits:[];
+  for(const x of rh.slice(0,4))lines.push("• "+String(x.entity_name??"—")+" • "+String(x.source_key??"—")+" • "+Number(x.confidence??0)+"/100");
+  lines.push("","📰 OSINT по району");
+  lines.push("• публикаций/сигналов: "+Number(os.count??0)+" • providers "+(Array.isArray(os.providers)?os.providers.length:0));
+  const oi:any[]=Array.isArray(os.items)?os.items:[];
+  for(const x of oi.slice(0,4))lines.push("• ["+String(x.source??"source")+"] "+String(x.title??"").replace(/\s+/g," ").slice(0,160)+(x.distance_m!=null?" • "+Math.round(Number(x.distance_m))+" м":""));
+  if(Array.isArray(d.errors)&&d.errors.length)lines.push("","⚠️ Partial: "+d.errors.slice(0,3).join(" | "));
+  lines.push("","/entity <ID|QID> — карточка объекта","/registry <ID|QID> — официальный/реестровый контекст","Пространственная близость не доказывает причинную связь или operational significance.");
+  return lines.join("\n").slice(0,3900);
+}
+function regionalErrorText(e:any){const m=e instanceof Error?e.message:String(e);if(/oblast not found/i.test(m))return "⚠️ Область не распознана.\n\nПример: /objects Киевская область АЗС\nТакже поддерживаются украинские и английские названия.";if(/unsupported category/i.test(m))return "⚠️ Категория не поддерживается.\n\nДоступно: АЗС, подстанции/ПС, электростанции/ТЭЦ/АЭС, резервуары/ёмкости, больницы, аптеки, школы, пожарные части, полиция, энергетика, промышленность, склады, супермаркеты, телеком, транспорт.";return "⚠️ Региональный поиск временно не выполнен.\n"+m.slice(0,240)}
+
+
 async function areaIntelRequest(payload:any){
   const u=Deno.env.get("SUPABASE_URL"),k=Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
   if(!u||!k)throw new Error("missing Supabase env");
