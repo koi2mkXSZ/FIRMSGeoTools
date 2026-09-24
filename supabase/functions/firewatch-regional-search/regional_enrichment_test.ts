@@ -1,4 +1,4 @@
-import {applyObjectFilters,enrichSettlements,toGeoJson} from "./regional_enrichment.ts";
+import {applyObjectFilters,applySettlementTarget,enrichSettlements,resolveSettlementTarget,toGeoJson} from "./regional_enrichment.ts";
 
 function assert(x:unknown,msg:string){if(!x)throw new Error(msg)}
 
@@ -40,4 +40,27 @@ Deno.test("GeoJSON export is valid FeatureCollection",()=>{
  assert(g.features.length===1,"feature count");
  assert(g.features[0].geometry.coordinates[0]===34.5,"longitude order");
  assert(g.metadata.oblast_code==="UA53","metadata");
+});
+
+
+Deno.test("settlement target uses explicit radius fallback",()=>{
+ const settlements=[
+  {name:"Полтава",latitude:49.5897,longitude:34.5508,place:"city",population:297600,source_id:"N:1"},
+  {name:"Полтава",latitude:49.80,longitude:34.20,place:"village",population:200,source_id:"N:2"}
+ ];
+ const target=resolveSettlementTarget(settlements,"Полтава");
+ assert(target?.source_id==="N:1","city candidate should win exact-name tie");
+ assert(target?.mode==="radius_fallback","mode");
+ assert(target?.radius_m===15000,"city fallback radius");
+ const xs=[
+  {canonical_name:"near",latitude:49.60,longitude:34.56},
+  {canonical_name:"far",latitude:49.90,longitude:34.90}
+ ];
+ const filtered=applySettlementTarget(xs,target);
+ assert(filtered.length===1&&filtered[0].canonical_name==="near","radius settlement filter failed");
+});
+
+Deno.test("unknown settlement target does not silently resolve",()=>{
+ const target=resolveSettlementTarget([{name:"Полтава",latitude:49.59,longitude:34.55,place:"city"}],"Кременчук");
+ assert(target===null,"unrelated settlement must not resolve");
 });
