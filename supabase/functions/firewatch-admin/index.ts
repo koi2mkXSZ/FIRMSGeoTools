@@ -1308,7 +1308,7 @@ Deno.serve(async(req:Request)=>{
 
     let state=stateRow?.value??{};
 
-    if(!state.commands_v18){
+    if(!state.commands_v19){
       await tg(token,"setMyCommands",{commands:[
         {command:"start",description:"Открыть админ-панель"},
         {command:"status",description:"Статус мониторинга"},
@@ -1347,6 +1347,7 @@ Deno.serve(async(req:Request)=>{
       state.commands_v16=true;
       state.commands_v17=true;
       state.commands_v18=true;
+      state.commands_v19=true;
     }
 
     if(mode==="cron"){
