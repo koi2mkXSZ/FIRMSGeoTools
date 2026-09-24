@@ -703,7 +703,7 @@ function areaIntelText(d:any){
   lines.push("• exact QID: "+Number(er.exact_qid??0)+" • probable "+Number(er.probable??0)+" • review "+Number(er.pending_proposals??0));
   if(src.wikidata)lines.push("• Wikidata: "+String(src.wikidata)+" • "+String(src.wikidata_transport??"—"));
   const multi=entities.filter((x:any)=>Number(x.source_count??0)>1).slice(0,6);
-  for(const x of multi)lines.push("  ↳ "+String(x.canonical_name??"—")+" • "+Number(x.source_count??0)+" sources"+(x.wikidata_qid?" • "+String(x.wikidata_qid):"")+" • "+String(x.resolution_status??""));
+  for(const x of multi)lines.push("  ↳ "+String(x.canonical_name??"—")+" • #"+String(x.id??"").slice(0,8)+" • "+Number(x.source_count??0)+" sources"+(x.wikidata_qid?" • "+String(x.wikidata_qid):"")+" • "+String(x.resolution_status??""));
   lines.push("","📍 Ближайшие объекты");
   for(const k of order){
     const x=near[k];if(!x)continue;
@@ -719,6 +719,53 @@ function areaIntelText(d:any){
   return lines.join("\n").slice(0,3900);
 }
 
+async function entityProfileRequest(query:string){
+  const u=Deno.env.get("SUPABASE_URL"),k=Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
+  if(!u||!k)throw new Error("missing Supabase env");
+  const r=await fetch(u+"/functions/v1/firewatch-entity-profile",{
+    method:"POST",headers:{"content-type":"application/json","authorization":"Bearer "+k},
+    body:JSON.stringify({query}),signal:AbortSignal.timeout(30000)
+  });
+  const t=await r.text();let d:any;try{d=JSON.parse(t)}catch{throw new Error("Entity Profile invalid response")}
+  if(!r.ok||!d?.ok)throw new Error(String(d?.error??("HTTP "+r.status)));return d;
+}
+function entityProfileText(d:any){
+  const e=d?.entity??{},p=d?.profile??{},fp=d?.field_provenance??{},src=d?.source_status??{};
+  const arr=(x:any)=>Array.isArray(x)?x:[];
+  const one=(x:any)=>Array.isArray(x)?x.join(", "):String(x??"");
+  const lines=[
+    "🏷 ENTITY PROFILE #"+String(e.id??"").slice(0,8),
+    String(p.canonical_name??e.canonical_name??"—"),
+    "Категория: "+String(p.category??e.category??"—")+(p.subcategory?" • "+String(p.subcategory):""),
+    "Координаты: "+Number(p.latitude??e.latitude).toFixed(5)+", "+Number(p.longitude??e.longitude).toFixed(5),
+    "Identity: "+String(p.identity?.resolution_status??e.resolution_status??"—")+" • confidence "+String(p.identity?.resolution_confidence??e.resolution_confidence??"—")+" • sources "+Number(p.identity?.source_count??e.source_count??0)
+  ];
+  if(p.wikidata_qid)lines.push("Wikidata: "+String(p.wikidata_qid));
+  if(p.description)lines.push("Описание: "+String(p.description).slice(0,500));
+  if(arr(p.instance_of).length)lines.push("Тип: "+one(p.instance_of));
+  if(arr(p.country).length)lines.push("Страна: "+one(p.country));
+  if(arr(p.administrative_entity).length)lines.push("Адм. принадлежность: "+one(p.administrative_entity));
+  if(arr(p.operator).length||typeof p.operator==="string")lines.push("Оператор: "+one(p.operator));
+  if(arr(p.owner).length||typeof p.owner==="string")lines.push("Владелец: "+one(p.owner));
+  if(p.brand)lines.push("Бренд: "+one(p.brand));
+  if(p.inception)lines.push("Основан/введён: "+String(p.inception));
+  if(arr(p.aliases).length)lines.push("Альтернативные названия: "+arr(p.aliases).slice(0,8).join("; "));
+  if(p.official_website)lines.push("Официальный сайт: "+String(p.official_website));
+  const sources:any[]=Array.isArray(p.sources)?p.sources:[];
+  if(sources.length){
+    lines.push("","🔎 Provenance:");
+    for(const x of sources.slice(0,8))lines.push("• "+String(x.source)+" • "+String(x.source_id)+" • "+String(x.match_method)+" • "+Number(x.match_confidence??0));
+  }
+  const fieldNames=["canonical_name","description","instance_of","country","administrative_entity","operator","owner","official_website"];
+  const provRows=fieldNames.filter(k=>fp?.[k]);
+  if(provRows.length){
+    lines.push("","📚 Поля:");
+    for(const k of provRows.slice(0,8)){const x=fp[k];lines.push("• "+k+": "+String(x.source)+" • "+Number(x.confidence??0)+"/100")}
+  }
+  lines.push("","Источник статуса: Wikidata "+String(src.wikidata??"—")+" • OSM "+String(src.osm??"—")+" • Overture "+String(src.overture??"—"));
+  lines.push("Профиль описательный: без оценки уязвимости, доступа или operational capability.");
+  return lines.join("\n").slice(0,3900);
+}
 async function latencyText(sb:any,eventId?:string){
   if(eventId?.trim()){
     const {data,error}=await sb.rpc("firewatch_event_latency",{p_query:eventId.trim()});
@@ -947,6 +994,12 @@ async function processAdminUpdate(sb:any,token:string,adminId:string,u:any){
     const arg=raw.split(/\s+/)[1]??"24";
     await tg(token,"sendMessage",{chat_id:adminId,text:await analyticsText(sb,Number(arg)),reply_markup:panelKeyboard});
     return true;
+  }
+  if(low.startsWith("/entity")){
+    const q=raw.split(/\s+/).slice(1).join(" ").trim();
+    if(!q){await tg(token,"sendMessage",{chat_id:adminId,text:"Использование: /entity <QID|entity-id>\nПример: /entity Q30017836",reply_markup:panelKeyboard});return true}
+    const d=await entityProfileRequest(q);
+    await tg(token,"sendMessage",{chat_id:adminId,text:entityProfileText(d),reply_markup:panelKeyboard,disable_web_page_preview:true});return true
   }
   if(low.startsWith("/infra")){
     const p=raw.split(/\s+/),id=String(p[1]??"").trim(),radius=Math.max(250,Math.min(10000,Number(p[2]??2000)||2000));
