@@ -160,13 +160,19 @@ export type RegionalFilters={
  address?:string|null;
  brand?:string|null;
  operator?:string|null;
+ source?:string|null;
+ min_confidence?:string|null;
+ has_address?:string|null;
 };
 
 const FILTER_ALIASES:Record<string,keyof RegionalFilters>={
  "city":"settlement","town":"settlement","settlement":"settlement","город":"settlement","місто":"settlement","населенный":"settlement","населений":"settlement",
  "addr":"address","address":"address","адрес":"address","адреса":"address",
  "brand":"brand","бренд":"brand",
- "operator":"operator","оператор":"operator"
+ "operator":"operator","оператор":"operator",
+ "source":"source","src":"source","источник":"source","джерело":"source",
+ "confidence":"min_confidence","conf":"min_confidence","min_confidence":"min_confidence","уверенность":"min_confidence","впевненість":"min_confidence",
+ "has_address":"has_address","addressed":"has_address","с_адресом":"has_address","з_адресою":"has_address"
 };
 
 function safeFilterValue(v:unknown){return String(v??"").trim().replace(/^["']|["']$/g,"").slice(0,120)}
@@ -175,8 +181,11 @@ function sqlText(v:string){return"'%"+String(v).toLowerCase().trim().replace(/'/
 export function normalizeFilters(v:any):RegionalFilters{
  const out:RegionalFilters={};
  if(!v||typeof v!=="object")return out;
- for(const k of ["settlement","address","brand","operator"] as const){
-  const x=safeFilterValue(v[k]);if(x)out[k]=x;
+ for(const k of ["settlement","address","brand","operator","source","min_confidence","has_address"] as const){
+  const x=safeFilterValue(v[k]);if(!x)continue;
+  if(k==="min_confidence"){const n=Math.max(0,Math.min(100,Number(x)));if(Number.isFinite(n))out[k]=String(n);continue}
+  if(k==="has_address"){const q=norm(x);if(["yes","true","1","да","так","present"].includes(q))out[k]="yes";else if(["no","false","0","нет","ні","missing"].includes(q))out[k]="no";continue}
+  out[k]=x;
  }
  return out;
 }
@@ -184,7 +193,7 @@ export function normalizeFilters(v:any):RegionalFilters{
 export function extractRegionalFilters(v:unknown){
  let text=String(v??"").trim();
  const filters:RegionalFilters={};
- const re=/(^|\s)(city|town|settlement|город|місто|населенный|населений|addr|address|адрес|адреса|brand|бренд|operator|оператор)\s*:\s*("(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|[^\s+]+)/giu;
+ const re=/(^|\s)(city|town|settlement|город|місто|населенный|населений|addr|address|адрес|адреса|brand|бренд|operator|оператор|source|src|источник|джерело|confidence|conf|min_confidence|уверенность|впевненість|has_address|addressed|с_адресом|з_адресою)\s*:\s*("(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|[^\s+]+)/giu;
  text=text.replace(re,(m,prefix,key,value)=>{
   const mapped=FILTER_ALIASES[norm(key)],clean=safeFilterValue(value);
   if(mapped&&clean)filters[mapped]=clean;
@@ -195,16 +204,13 @@ export function extractRegionalFilters(v:unknown){
 
 export function mergeFilters(a:RegionalFilters,b:RegionalFilters){
  const out:RegionalFilters={...a};
- for(const k of ["settlement","address","brand","operator"] as const)if(b[k])out[k]=b[k];
+ for(const k of ["settlement","address","brand","operator","source","min_confidence","has_address"] as const)if(b[k])out[k]=b[k];
  return out;
 }
 
 export function buildFilterPredicate(filters:RegionalFilters){
  const f=normalizeFilters(filters),preds:string[]=[];
- if(f.settlement){
-  const q=sqlText(f.settlement);
-  preds.push("(lower(coalesce(tags->>'addr:city','')) LIKE "+q+" OR lower(coalesce(tags->>'addr:town','')) LIKE "+q+" OR lower(coalesce(tags->>'addr:village','')) LIKE "+q+" OR lower(coalesce(tags->>'addr:place','')) LIKE "+q+" OR lower(coalesce(tags->>'is_in','')) LIKE "+q+")");
- }
+ // settlement is evaluated after spatial settlement enrichment, not pushed down here.
  if(f.address){
   const q=sqlText(f.address);
   preds.push("(lower(concat_ws(' ',coalesce(tags->>'addr:full',''),coalesce(tags->>'addr:street',''),coalesce(tags->>'addr:housenumber',''),coalesce(tags->>'addr:place',''))) LIKE "+q+")");
