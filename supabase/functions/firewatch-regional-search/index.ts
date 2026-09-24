@@ -106,6 +106,7 @@ Deno.serve(async(req:Request)=>{
   const labels=specs.map(x=>x.label);
   const hasFilters=Object.values(filters).some(Boolean);
   const combinedKey=specs.length===1&&!hasFilters?specs[0].key:"plan_"+multiKey(plan.resolutions,filters);
+  const querySpecs:Spec[]=specs.map(x=>({...x,osm:"("+x.osm+") AND ("+filterPredicate+")"}));
   const spec:Spec={
     key:combinedKey,
     label:labels.join(" + "),
@@ -144,24 +145,35 @@ Deno.serve(async(req:Request)=>{
     return json(payload);
   }
 
-  const errors:string[]=[];let osmStatus="active",overture:any={status:"not_checked",features:[],tiles_total:0,tiles_ok:0},wd:any[]=[];
+  const errors:string[]=[];let osmStatus="active",osmTruncated=false,overture:any={status:"not_checked",features:[],tiles_total:0,tiles_ok:0},wd:any[]=[];
   const bbox=(oblast.bbox??[]).map(Number),geom=oblast.geometry;if(bbox.length!==4||!geom)throw new Error("oblast geometry unavailable");
-  const osmRows:any[]=[];
-  try{
-    const d=await postpass(postpassSql(bbox,spec)),raw=Array.isArray(d?.features)?d.features:[];
-    if(raw.length>=RAW_LIMIT)errors.push("OSM candidate limit reached; result may be truncated");
+  const osmRows:any[]=[],osmMap=new Map<string,any>();
+  const settled=await Promise.allSettled(querySpecs.map(x=>postpass(postpassSql(bbox,x))));
+  let osmOk=0;
+  for(let qi=0;qi<settled.length;qi++){
+    const q=settled[qi],qs=querySpecs[qi];
+    if(q.status==="rejected"){errors.push("OSM/Postpass "+qs.label+": "+errText(q.reason));continue}
+    osmOk++;
+    const raw=Array.isArray(q.value?.features)?q.value.features:[];
+    if(raw.length>=RAW_LIMIT){osmTruncated=true;errors.push("OSM "+qs.label+": candidate limit reached")}
     for(const f of raw){
       const p=f?.properties??{},t=p.tags??{},ctr=geoCenter(f);
       if(!ctr||!Number.isFinite(ctr[0])||!Number.isFinite(ctr[1])||!insideGeom(ctr[0],ctr[1],geom))continue;
+      const sourceId=String(p.osm_type??"")+":"+String(p.osm_id??"");
+      if(osmMap.has(sourceId))continue;
       const ad=addrFromTags(t),qid=/^Q\d+$/.test(String(t?.wikidata??""))?String(t.wikidata):null;
-      osmRows.push({source:"OpenStreetMap",source_id:String(p.osm_type??"")+":"+String(p.osm_id??""),name:osmName(t,spec),latitude:ctr[0],longitude:ctr[1],wikidata_qid:qid,brand:t?.brand?String(t.brand):null,operator:t?.operator?String(t.operator):null,settlement:ad.settlement,address:ad.address,tags:safeOsm(t)});
+      const row={source:"OpenStreetMap",source_id:sourceId,name:osmName(t,qs),latitude:ctr[0],longitude:ctr[1],wikidata_qid:qid,brand:t?.brand?String(t.brand):null,operator:t?.operator?String(t.operator):null,settlement:ad.settlement,address:ad.address,tags:safeOsm(t)};
+      osmMap.set(sourceId,row);osmRows.push(row);
+      if(osmRows.length>=12000){osmTruncated=true;break}
     }
-  }catch(e){osmStatus="error";errors.push("OSM/Postpass: "+errText(e))}
+    if(osmRows.length>=12000)break;
+  }
+  osmStatus=osmOk===querySpecs.length?"active":osmOk>0?"partial":"error";
   try{overture=await overtureRegion(bbox,geom,spec);if(["error","partial","tile_limit"].includes(String(overture.status)))errors.push("Overture: "+overture.status+(overture.errors?.length?" • "+overture.errors[0]:""))}catch(e){overture={status:"error",features:[],tiles_total:0,tiles_ok:0};errors.push("Overture: "+errText(e))}
   if(body.count_only!==true){try{wd=await wikidataByQids(osmRows)}catch(e){errors.push("Wikidata: "+errText(e))}}
   const objects=resolve([...osmRows,...overture.features,...wd],spec).slice(0,OUTPUT_LIMIT);
-  const truncated=osmRows.length>=RAW_LIMIT||objects.length>=OUTPUT_LIMIT;
-  const sources={osm_postpass:osmStatus,overture:overture.status,overture_reason:overture.reason??null,wikidata:body.count_only===true?"skipped_count_only":wd.length?"active":"not_applicable",wikidata_mode:"qid_enrichment",overture_release:OVERTURE_RELEASE,overture_tiles_total:overture.tiles_total,overture_tiles_ok:overture.tiles_ok};
+  const truncated=osmTruncated||objects.length>=OUTPUT_LIMIT;
+  const sources={osm_postpass:osmStatus,osm_query_count:querySpecs.length,osm_queries_ok:osmOk,overture:overture.status,overture_reason:overture.reason??null,wikidata:body.count_only===true?"skipped_count_only":wd.length?"active":"not_applicable",wikidata_mode:"qid_enrichment",overture_release:OVERTURE_RELEASE,overture_tiles_total:overture.tiles_total,overture_tiles_ok:overture.tiles_ok};
   const status=osmStatus!=="active"||["error","partial","tile_limit"].includes(String(overture.status))||truncated?"degraded":"active",now=new Date().toISOString();
   const summary={resolved_objects:objects.length,multi_source:objects.filter((x:any)=>x.source_count>1).length,osm_objects:osmRows.length,overture_objects:overture.features.length,wikidata_objects:wd.length,truncated,cache_ttl_hours:12,resolution:resolutionInfo,filters,category_count:specs.length};
   const row={query_key:queryKey,oblast_id:oblast.id,oblast_code:oblast.code,oblast_name:oblast.name_uk,category_key:spec.key,queried_at:now,status,source_status:sources,summary,objects,errors,updated_at:now};
