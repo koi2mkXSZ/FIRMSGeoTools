@@ -19,7 +19,8 @@ async function tg(token:string,method:string,body:unknown){const r=await fetch(`
 async function tgDocument(token:string,chatId:string,bytes:Uint8Array,fileName:string,caption:string,replyMarkup:any){
   const form=new FormData();
   form.append("chat_id",chatId);
-  const payload=bytes.buffer.slice(bytes.byteOffset,bytes.byteOffset+bytes.byteLength) as ArrayBuffer;\n  form.append("document",new Blob([payload],{type:"text/html"}),fileName);
+  const payload=bytes.buffer.slice(bytes.byteOffset,bytes.byteOffset+bytes.byteLength) as ArrayBuffer;
+  form.append("document",new Blob([payload],{type:"text/html"}),fileName);
   form.append("caption",caption);
   form.append("reply_markup",JSON.stringify(replyMarkup));
   const r=await fetch(`https://api.telegram.org/bot${token}/sendDocument`,{method:"POST",body:form,signal:AbortSignal.timeout(30000)});
