@@ -28,7 +28,7 @@ async function tgDocument(token:string,chatId:string,bytes:Uint8Array,fileName:s
   return d.result;
 }
 
-const panelKeyboard={inline_keyboard:[[{text:"🌐 Web Dashboard",callback_data:"admin:dashboard"}],[{text:"📊 Статус",callback_data:"admin:status"},{text:"🛰 Источники",callback_data:"admin:sources"}],[{text:"🔥 Последние события",callback_data:"admin:events"},{text:"📋 Отчёт события",callback_data:"admin:report"}],[{text:"📑 Досье события",callback_data:"admin:dossier"},{text:"🛰 Поверхность",callback_data:"admin:satellite"}],[{text:"🧠 Последнее событие",callback_data:"admin:event"},{text:"🧪 Integrity",callback_data:"admin:integrity"}],[{text:"📡 Coverage",callback_data:"admin:coverage"},{text:"🧾 Review Queue",callback_data:"admin:review"}],[{text:"🔎 OSINT",callback_data:"admin:osint"},{text:"🗺 Гео/инфра",callback_data:"admin:geo"}],[{text:"🌫 Наземные датчики",callback_data:"admin:ground"}],[{text:"🔎 Поиск",callback_data:"admin:search"},{text:"📈 Аналитика",callback_data:"admin:analytics"}],[{text:"👥 Клиенты",callback_data:"admin:clients"}],[{text:"🗄 Архив",callback_data:"admin:archive"},{text:"🔄 Обновить",callback_data:"admin:status"}]]};
+const panelKeyboard={inline_keyboard:[[{text:"🌐 Web Dashboard",callback_data:"admin:dashboard"}],[{text:"📊 Статус",callback_data:"admin:status"},{text:"🛰 Источники",callback_data:"admin:sources"}],[{text:"🔥 Последние события",callback_data:"admin:events"},{text:"📋 Отчёт события",callback_data:"admin:report"}],[{text:"📑 Досье события",callback_data:"admin:dossier"},{text:"🛰 Поверхность",callback_data:"admin:satellite"}],[{text:"🧠 Последнее событие",callback_data:"admin:event"},{text:"🧪 Integrity",callback_data:"admin:integrity"}],[{text:"📡 Coverage",callback_data:"admin:coverage"},{text:"⏱ Latency",callback_data:"admin:latency"}],[{text:"🧾 Review Queue",callback_data:"admin:review"}],[{text:"🔎 OSINT",callback_data:"admin:osint"},{text:"🗺 Гео/инфра",callback_data:"admin:geo"}],[{text:"🌫 Наземные датчики",callback_data:"admin:ground"}],[{text:"🔎 Поиск",callback_data:"admin:search"},{text:"📈 Аналитика",callback_data:"admin:analytics"}],[{text:"👥 Клиенты",callback_data:"admin:clients"}],[{text:"🗄 Архив",callback_data:"admin:archive"},{text:"🔄 Обновить",callback_data:"admin:status"}]]};
 const searchKeyboard={inline_keyboard:[
   [{text:"📍 По координате и радиусу",callback_data:"admin:search_geo"}],
   [{text:"🧩 Все фильтры поиска",callback_data:"admin:search_help"}],
@@ -663,6 +663,42 @@ async function setClientStatus(sb:any,id:string,status:"active"|"blocked"){
   return data;
 }
 
+async function latencyText(sb:any,eventId?:string){
+  if(eventId?.trim()){
+    const {data,error}=await sb.rpc("firewatch_event_latency",{p_query:eventId.trim()});
+    if(error)throw error;
+    if(!data)return "⏱ Latency\n\nСобытие не найдено.";
+    const ds:any[]=Array.isArray(data.detections)?data.detections:[];
+    const lines=[
+      "⏱ LATENCY #"+String(data.event_id??"").slice(0,8),
+      "",
+      "Source latency: "+Number(data.source_latency_min??0).toFixed(1)+" мин",
+      "GeoWatch delivery: "+(data.delivery_latency_min==null?"—":Number(data.delivery_latency_min).toFixed(1)+" мин"),
+      "End-to-end: "+(data.end_to_end_latency_min==null?"—":Number(data.end_to_end_latency_min).toFixed(1)+" мин"),
+      "Telegram: "+(data.telegram_sent?"sent":"not sent")+" • required "+String(Boolean(data.notification_required)),
+      ""
+    ];
+    for(const d of ds.slice(0,8))lines.push("• "+String(d.source??"—")+" • "+Number(d.source_latency_min??0).toFixed(1)+" мин • "+String(d.acq_datetime??"").slice(0,16)+" → "+String(d.received_at??"").slice(0,16));
+    return lines.join("\n").slice(0,3900);
+  }
+  const {data,error}=await sb.rpc("firewatch_latency_health",{p_hours:24});
+  if(error)throw error;
+  const x=data??{},d=x.detections??{},v=x.delivery??{},src:any[]=Array.isArray(x.by_source)?x.by_source:[];
+  const lines=[
+    "⏱ SOURCE / DELIVERY LATENCY • 24h",
+    "",
+    "Source: p50 "+Number(d.p50_min??0).toFixed(1)+" мин • p95 "+Number(d.p95_min??0).toFixed(1)+" мин • max "+Number(d.max_min??0).toFixed(1)+" мин",
+    ">90 мин: "+Number(d.over_90m??0)+" / "+Number(d.count??0),
+    "Delivery: p50 "+Number(v.p50_min??0).toFixed(1)+" мин • p95 "+Number(v.p95_min??0).toFixed(1)+" мин • max "+Number(v.max_min??0).toFixed(1)+" мин",
+    ">10 мин: "+Number(v.over_10m??0)+" • required unsent: "+Number(v.required_unsent??0),
+    "",
+    "По источникам:"
+  ];
+  for(const s of src.slice(0,8))lines.push("• "+String(s.source??"—")+" • p95 "+Number(s.p95_min??0).toFixed(1)+" мин • >90м "+Number(s.over_90m??0)+"/"+Number(s.detections??0));
+  lines.push("","Пороги: source >90 мин • delivery >10 мин.");
+  return lines.join("\n").slice(0,3900);
+}
+
 async function reviewQueueData(sb:any,eventId?:string){
   const {data,error}=await sb.rpc("firewatch_review_queue",{p_limit:12,p_event:eventId?.trim()||null});
   if(error)throw error;return data??{pending:0,items:[]};
@@ -703,6 +739,7 @@ async function processAdminUpdate(sb:any,token:string,adminId:string,u:any){
     const q=u.callback_query;
     if(String(q?.message?.chat?.id)!==adminId)return false;
     const action=String(q.data??"").replace("admin:","");
+    if(action==="latency"){try{await tg(token,"answerCallbackQuery",{callback_query_id:q.id})}catch{}await tg(token,"sendMessage",{chat_id:adminId,text:await latencyText(sb),reply_markup:panelKeyboard});return true}
     if(action==="review"||action.startsWith("review_accept:")||action.startsWith("review_reject:")||action.startsWith("review_more:")){
       try{await tg(token,"answerCallbackQuery",{callback_query_id:q.id})}catch{}
       if(action!=="review"){
@@ -843,6 +880,7 @@ async function processAdminUpdate(sb:any,token:string,adminId:string,u:any){
     await tg(token,"sendMessage",{chat_id:adminId,text:await analyticsText(sb,Number(arg)),reply_markup:panelKeyboard});
     return true;
   }
+  if(low.startsWith("/latency")){const arg=raw.split(/\s+/).slice(1).join(" ").trim();await tg(token,"sendMessage",{chat_id:adminId,text:await latencyText(sb,arg||undefined),reply_markup:panelKeyboard});return true}
   if(low.startsWith("/review_accept")||low.startsWith("/review_reject")||low.startsWith("/review_more")){
     const parts=raw.split(/\s+/),id=parts[1],note=parts.slice(2).join(" ").trim()||undefined;
     if(!id){await tg(token,"sendMessage",{chat_id:adminId,text:"Использование: /review_accept <ID> [note] | /review_reject <ID> [note] | /review_more <ID> [note]",reply_markup:panelKeyboard});return true}
