@@ -99,7 +99,7 @@ async function deepOsint(sb:any,q:string){
 }
 function deepOsintText(d:any){
   if(!d)return "🧠 Deep OSINT\n\nСобытие не найдено.";
-  const e=d.event??{},s=d.summary??{},eff=d.effis??{},air=d.air_context??{},al=air.air_alert??{},th=air.public_air_threat_context??{},sem=d.semantic??{},ss=sem.summary??{},src:any[]=Array.isArray(d.sources)?d.sources:[],tl:any[]=Array.isArray(d.timeline)?d.timeline:[];
+  const e=d.event??{},s=d.summary??{},eff=d.effis??{},air=d.air_context??{},al=air.air_alert??{},th=air.public_air_threat_context??{},geo=d.geolocation??{},ov=geo.overture??{},gn=geo.geonames??{},sem=d.semantic??{},ss=sem.summary??{},src:any[]=Array.isArray(d.sources)?d.sources:[],tl:any[]=Array.isArray(d.timeline)?d.timeline:[];
   const items=Number(ss.items??0),providers=Number(ss.providers??0),classes=Number(ss.source_classes??0);
   const geoSupported=Number(ss.geo_supported??0),duplicates=Number(ss.duplicate_items??0),divergences=Number(ss.divergences??0);
   const corr=String(s.corroboration_level??"none");
@@ -134,6 +134,23 @@ function deepOsintText(d:any){
     lines.push("Публичный air-threat context: есть • "+types+" • "+String(th.time_relation??"—"));
   }else lines.push("Публичный air-threat context: не найден");
   lines.push("");
+
+  const ovPlaces:any[]=Array.isArray(ov.places)?ov.places:[];
+  lines.push("🗺 Геоконтекст");
+  if(String(ov.status??"not_cached")==="not_cached"){
+    lines.push("Overture: ещё не закэшировано");
+  }else if(ovPlaces.length){
+    lines.push("Overture Places: "+ovPlaces.length+" • snapshot "+String(ov.release??"—"));
+    for(const p of ovPlaces.slice(0,3)){
+      lines.push("• "+String(p.name??p.category??"объект")+" • "+Number(p.distance_m??0)+" м"+(p.category?" • "+String(p.category):""));
+    }
+  }else{
+    lines.push("Overture: "+String(ov.status??"—")+" • ближайшие POI не найдены");
+  }
+  if(String(gn.status??"not_cached")==="waiting_username")lines.push("GeoNames: ожидает подключения username");
+  else if(Array.isArray(gn.places)&&gn.places.length)lines.push("GeoNames: "+gn.places.slice(0,3).map((p:any)=>String(p.name??p.toponym_name??"—")).join(", "));
+  lines.push("");
+
   if(src.length){
     lines.push("Источники Fusion:");
     for(const x of src.slice(0,8))lines.push("• "+String(x.label??x.source)+" • "+String(x.source_class??"—")+" • max "+Number(x.max_relevance??0)+"/100 • "+Number(x.evidence_count??0)+" evidence");

@@ -71,6 +71,10 @@ function extract(text:string,ctx:any){
   const foundOblast=oblastNames.find((x:string)=>t.includes(x))??stems.find((x:string)=>t.includes(x))??roots.find((x:string)=>t.includes(x));
   if(foundOblast&&geoScore<90){addE("admin1",norm(ctx.oblast_name_uk??ctx.oblast_name??foundOblast),foundOblast,95,{oblast_id:ctx.oblast_id});geoStatus="oblast";geoScore=90}
   if(geoScore===0){
+    const local=(ctx.local_gazetteer??[]).find((p:string)=>p!==place&&p.length>=4&&t.includes(p));
+    if(local){addE("place",local,local,86,{role:"nearby_geospatial_reference"});geoStatus="local_reference";geoScore=85}
+  }
+  if(geoScore===0){
     const other=(ctx.gazetteer??[]).find((p:string)=>p!==place&&p.length>=4&&t.includes(p));
     if(other){addE("place",other,other,82,{role:"other_known_place"});geoStatus="other_known_place";geoScore=10}
   }
@@ -112,11 +116,29 @@ Deno.serve(async(req:Request)=>{
   const eventIds=new Set<string>();
   for(const x of pubQ.data??[])if(x.fire_event_id)eventIds.add(String(x.fire_event_id));
   for(const d of docQ.data??[])for(const l of d.osint_event_links??[])if(l.fire_event_id)eventIds.add(String(l.fire_event_id));
-  let events:any[]=[];
-  if(eventIds.size){const q=await sb.from("fire_events").select("id,oblast_id,nearest_place_name").in("id",[...eventIds]);if(q.error)throw q.error;events=q.data??[]}
+  let events:any[]=[],geoContexts:any[]=[];
+  if(eventIds.size){
+    const [q,gq]=await Promise.all([
+      sb.from("fire_events").select("id,oblast_id,nearest_place_name").in("id",[...eventIds]),
+      sb.from("event_geolocation_context").select("fire_event_id,overture_places,geonames_places").in("fire_event_id",[...eventIds])
+    ]);
+    if(q.error)throw q.error;if(gq.error)throw gq.error;
+    events=q.data??[];geoContexts=gq.data??[];
+  }
+  const geoMap=new Map((geoContexts??[]).map((g:any)=>{
+    const names:string[]=[];
+    for(const p of Array.isArray(g.overture_places)?g.overture_places:[]){
+      for(const v of [p?.name,p?.locality]){const n=norm(v);if(n.length>=4)names.push(n)}
+    }
+    for(const p of Array.isArray(g.geonames_places)?g.geonames_places:[]){
+      for(const v of [p?.name,p?.toponym_name,p?.admin1]){const n=norm(v);if(n.length>=4)names.push(n)}
+    }
+    return [String(g.fire_event_id),[...new Set(names)].sort((a:string,b:string)=>b.length-a.length).slice(0,80)];
+  }));
   const eventMap=new Map(events.map((e:any)=>{
     const o:any=oblastMap.get(Number(e.oblast_id))??{};
-    return [String(e.id),{...e,oblast_name:o.name??null,oblast_name_uk:o.name_uk??null,oblast_name_en:o.name_en??null,gazetteer}];
+    const local_gazetteer=geoMap.get(String(e.id))??[];
+    return [String(e.id),{...e,oblast_name:o.name??null,oblast_name_uk:o.name_uk??null,oblast_name_en:o.name_en??null,gazetteer,local_gazetteer}];
   }));
 
   const work:any[]=[];

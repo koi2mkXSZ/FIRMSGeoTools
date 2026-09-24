@@ -413,7 +413,7 @@ async function deepOsintText(sb:any,q?:string){
     .abortSignal(AbortSignal.timeout(7000));
   if(error)throw error;
   if(!data)return "🧠 Deep OSINT: событие не найдено.";
-  const e:any=data.event??{},s:any=data.summary??{},eff:any=data.effis??{},air:any=data.air_context??{},al:any=air.air_alert??{},th:any=air.public_air_threat_context??{},sem:any=data.semantic??{},ss:any=sem.summary??{},src:any[]=Array.isArray(data.sources)?data.sources:[],tl:any[]=Array.isArray(data.timeline)?data.timeline:[];
+  const e:any=data.event??{},s:any=data.summary??{},eff:any=data.effis??{},air:any=data.air_context??{},al:any=air.air_alert??{},th:any=air.public_air_threat_context??{},geo:any=data.geolocation??{},ov:any=geo.overture??{},gn:any=geo.geonames??{},sem:any=data.semantic??{},ss:any=sem.summary??{},src:any[]=Array.isArray(data.sources)?data.sources:[],tl:any[]=Array.isArray(data.timeline)?data.timeline:[];
   const items=Number(ss.items??0),providers=Number(ss.providers??0),classes=Number(ss.source_classes??0);
   const geoSupported=Number(ss.geo_supported??0),duplicates=Number(ss.duplicate_items??0),divergences=Number(ss.divergences??0);
   const lines=[
@@ -430,6 +430,8 @@ async function deepOsintText(sb:any,q?:string){
       :`EFFIS ${eff.status??"—"} • FWI ${eff.fwi_value==null?"—":Number(eff.fwi_value).toFixed(1)} • active ${Number(eff.active_fire_count??0)} • burnt-area ${Number(eff.burnt_area_count??0)}`,
     `Air alert: ${al.relation??"—"} • history ${al.history_available===false?"unavailable":"available"}`,
     `Public air-threat: ${th.present?"present":"none"} • ${Array.isArray(th.threat_types)?th.threat_types.join(", "):"—"} • ${th.time_relation??"—"}`,
+    `Geolocation: Overture ${ov.status??"not_cached"} • release ${ov.release??"—"} • tiles ${Number(ov.tiles_ok??0)}/${Number(ov.tiles_total??0)} • places ${Array.isArray(ov.places)?ov.places.length:0}`,
+    `GeoNames: ${gn.status??"not_cached"} • places ${Array.isArray(gn.places)?gn.places.length:0}`,
     ""
   ];
   if(src.length){
