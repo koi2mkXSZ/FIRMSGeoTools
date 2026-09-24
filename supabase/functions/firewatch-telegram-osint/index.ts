@@ -42,6 +42,14 @@ function locationMatch(text:string,e:any){
   for(const x of terms)if(t.includes(x.term))return {matched:true,...x};
   return {matched:false,kind:null,term:null,weight:0};
 }
+function strictSegmentMatch(text:string,e:any){
+  const segments=String(text??"").split(/\n+|(?<=[.!?])\s+/).map(x=>x.trim()).filter(Boolean);
+  for(const s of segments){
+    const lm=locationMatch(s,e);
+    if(lm.matched&&incident(s))return {matched:true,segment:s.slice(0,500),location:lm};
+  }
+  return {matched:false,segment:null,location:null};
+}
 function relevance(text:string,published:string|null,e:any){
   const reasons:string[]=[];let score=0;
   const inc=incident(text);if(inc){score+=35;reasons.push("incident_keyword")}
@@ -95,7 +103,9 @@ async function matchPost(sb:any,source:any,p:any,events:any[]){
   let matched=0;
   for(const e of events){
     const rel=relevance(p.text,p.published_at,e);
+    const strict=source.channel==="dsns_telegram"?strictSegmentMatch(p.text,e):null;
     if(!rel.incident||!rel.location.matched||rel.score<80)continue;
+    if(source.channel==="dsns_telegram"&&!strict?.matched)continue;
     const {error}=await sb.from("event_public_osint").upsert({
       fire_event_id:e.id,source_kind:"telegram",source_name:source.label,
       source_item_id:`${source.channel}:${p.post_id}`,
@@ -103,7 +113,8 @@ async function matchPost(sb:any,source:any,p:any,events:any[]){
       category:"public_telegram",relevance_score:rel.score,
       match_basis:{
         reasons:rel.reasons,location:rel.location,channel:source.channel,
-        source_tier:source.source_tier,method:"telegram_public_preview"
+        source_tier:source.source_tier,method:"telegram_public_preview",
+        ...(strict?.matched?{segment_gate:"same_segment",matched_segment:strict.segment}:{})
       },
       payload:{channel:source.channel,post_id:p.post_id,source_tier:source.source_tier},
       last_seen_at:new Date().toISOString(),updated_at:new Date().toISOString()

@@ -99,7 +99,7 @@ async function deepOsint(sb:any,q:string){
 }
 function deepOsintText(d:any){
   if(!d)return "🧠 Deep OSINT\n\nСобытие не найдено.";
-  const e=d.event??{},s=d.summary??{},eff=d.effis??{},air=d.air_context??{},al=air.air_alert??{},th=air.public_air_threat_context??{},geo=d.geolocation??{},ov=geo.overture??{},gn=geo.geonames??{},vis=d.visual_context??{},pano=vis.panoramax??{},oam=vis.openaerialmap??{},prov=d.provenance??{},sem=d.semantic??{},ss=sem.summary??{},src:any[]=Array.isArray(d.sources)?d.sources:[],tl:any[]=Array.isArray(d.timeline)?d.timeline:[];
+  const e=d.event??{},s=d.summary??{},eff=d.effis??{},air=d.air_context??{},al=air.air_alert??{},th=air.public_air_threat_context??{},geo=d.geolocation??{},ov=geo.overture??{},gn=geo.geonames??{},vis=d.visual_context??{},pano=vis.panoramax??{},oam=vis.openaerialmap??{},env=d.environment_context??{},radar=env.radar??{},li=env.lightning??{},prov=d.provenance??{},sem=d.semantic??{},ss=sem.summary??{},src:any[]=Array.isArray(d.sources)?d.sources:[],tl:any[]=Array.isArray(d.timeline)?d.timeline:[];
   const items=Number(ss.items??0),providers=Number(ss.providers??0),classes=Number(ss.source_classes??0);
   const geoSupported=Number(ss.geo_supported??0),duplicates=Number(ss.duplicate_items??0),divergences=Number(ss.divergences??0);
   const corr=String(s.corroboration_level??"none");
@@ -134,6 +134,16 @@ function deepOsintText(d:any){
     const types=Array.isArray(th.threat_types)&&th.threat_types.length?th.threat_types.join(", "):"тип не указан";
     lines.push("Публичный air-threat context: есть • "+types+" • "+String(th.time_relation??"—"));
   }else lines.push("Публичный air-threat context: не найден");
+  lines.push("");
+  lines.push("🌦 Погодный / грозовой контекст");
+  if(String(env.status??"not_cached")==="not_cached"){
+    lines.push("RainViewer / MTG LI: ещё не закэшировано");
+  }else{
+    const rs=String(radar.status??"—");
+    lines.push("RainViewer: "+(rs==="frame_available"?"radar frame есть"+(radar.time_delta_minutes!=null?" • Δt "+Number(radar.time_delta_minutes).toFixed(1)+" мин":""):rs==="history_unavailable"?"история для времени события недоступна":rs));
+    const ls=String(li.status??"—");
+    lines.push("MTG LI: "+(ls==="product_coverage_available"?"NRT product coverage есть • "+Number(li.product_count??0)+" products":"нет product coverage")+" • local flashes: "+String(li.local_signal??"not_extracted"));
+  }
   lines.push("");
 
   const ovPlaces:any[]=Array.isArray(ov.places)?ov.places:[];
