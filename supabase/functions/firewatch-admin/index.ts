@@ -172,7 +172,7 @@ async function sendSatelliteVisual(sb:any,token:string,adminId:string,q?:string)
 async function dossierText(sb:any,q?:string){
   const {data,error}=await sb.rpc("firewatch_dossier",{p_query:q?.trim()||null})
     .abortSignal(AbortSignal.timeout(7000));if(error)throw error;if(!data)return"Досье: событие не найдено.";
-  const d:any=data,e=d.event??{},sat=d.satellite??{},surf=d.satellite_surface??{},atm=d.atmosphere??{},geo=d.geospatial??{},inf=d.infrastructure??{},ground=d.ground??{},ext=d.external_osint??{},pub=d.public_osint??{},air=d.air_threat_context??{},hist=d.history??{};
+  const d:any=data,e=d.event??{},sat=d.satellite??{},surf=d.satellite_surface??{},atm=d.atmosphere??{},geo=d.geospatial??{},inf=d.infrastructure??{},ground=d.ground??{},ext=d.external_osint??{},pub=d.public_osint??{},air=d.air_threat_context??{},hist=d.history??{},pri=d.priority??{};
   const flags:string[]=Array.isArray(d.context_flags)?d.context_flags:[],classes:string[]=Array.isArray(d.evidence_classes)?d.evidence_classes:[],infra:any[]=Array.isArray(inf.features)?inf.features:[];
   const duration=Number(e.duration_minutes??0),durationText=duration>=60?(duration/60).toFixed(1)+" ч":Math.round(duration)+" мин";
   const declared=Array.isArray(sat.declared_sources)?sat.declared_sources.join(", "):"—";
@@ -184,6 +184,7 @@ async function dossierText(sb:any,q?:string){
     `Наблюдений: ${e.observation_count??0} • спутниковых платформ: ${sat.source_count??0}`,
     `Источники: ${declared}`,
     `Уверенность детекции: ${e.confidence_label??e.confidence_level??"—"}`,
+    `🚦 Приоритет просмотра: ${Number(pri.score??0)}/100 • ${pri.label??pri.level??"—"}`,
     "",
     `🔥 FRP max: ${dossierNum(sat.frp_max_mw,1)} МВт • avg: ${dossierNum(sat.frp_avg_mw,1)} МВт • тренд: ${sat.frp_trend??"—"}`,
     `Кластер: ${sat.cluster_diameter_m==null?"—":Math.round(Number(sat.cluster_diameter_m))+" м"}`,
@@ -403,6 +404,29 @@ async function analyticsText(sb:any,hours=24){
     `Geo integrity: ${gi.status??"—"} • missing ${Number(gi.missing_in_db??0)}`,
     `Baseline: ${bl.status??"—"} • watch ${Number(bl.sources_watch??0)} • anomaly ${Number(bl.sources_anomaly??0)}`
   );
+  return lines.join("\n").slice(0,3900);
+}
+
+
+async function priorityText(sb:any,hours=24,minScore=0){
+  const h=Math.max(1,Math.min(8760,Number(hours)||24));
+  const min=Math.max(0,Math.min(100,Number(minScore)||0));
+  const {data,error}=await sb.rpc("firewatch_priority_events",{p_hours:h,p_limit:20,p_min_score:min})
+    .abortSignal(AbortSignal.timeout(5000));
+  if(error)throw error;
+  const ev:any[]=Array.isArray(data?.events)?data.events:[];
+  const lines=[`🚦 Event Priority / Stage 39 • ${h} ч • min ${min}`,`Событий: ${ev.length}`];
+  for(const e of ev){
+    const icon=e.priority_level==="high"?"🔴":e.priority_level==="elevated"?"🟠":e.priority_level==="normal"?"🟡":"⚪";
+    lines.push("",
+      `${icon} #${String(e.id??"").slice(0,8)} • ${e.oblast??"—"} • ${Number(e.priority_score??0)}/100`,
+      `FRP ${e.frp_latest_avg==null?"—":Number(e.frp_latest_avg).toFixed(1)+" MW"} • obs ${Number(e.observation_count??0)} • platforms ${Number(e.multisource_count??0)} • ${e.frp_trend??"—"}`,
+      e.nearest_place_name?`${e.nearest_place_name}${e.nearest_place_distance_km==null?"":" • "+Number(e.nearest_place_distance_km).toFixed(1)+" км"}`:"",
+      `/dossier ${String(e.id??"").slice(0,8)}`
+    );
+  }
+  if(!ev.length)lines.push("","Событий по фильтру нет.");
+  lines.push("","Priority — очередь просмотра оператора. Не является оценкой причины, намерения или военной значимости.");
   return lines.join("\n").slice(0,3900);
 }
 
@@ -700,6 +724,13 @@ async function processAdminUpdate(sb:any,token:string,adminId:string,u:any){
     await tg(token,"sendMessage",{chat_id:adminId,text:await analyticsText(sb,Number(arg)),reply_markup:panelKeyboard});
     return true;
   }
+  if(low.startsWith("/priority")){
+    const parts=raw.split(/\s+/);
+    const hours=Number(parts[1]??24);
+    const minScore=Number(parts[2]??0);
+    await tg(token,"sendMessage",{chat_id:adminId,text:await priorityText(sb,hours,minScore),reply_markup:panelKeyboard});
+    return true;
+  }
   if(low.startsWith("/dossier")){
     const arg=raw.split(/\s+/).slice(1).join(" ").trim();
     await ensureSatelliteEvidence(sb,arg);
@@ -782,7 +813,7 @@ Deno.serve(async(req:Request)=>{
 
     let state=stateRow?.value??{};
 
-    if(!state.commands_v14){
+    if(!state.commands_v16){
       await tg(token,"setMyCommands",{commands:[
         {command:"start",description:"Открыть админ-панель"},
         {command:"status",description:"Статус мониторинга"},
@@ -794,6 +825,7 @@ Deno.serve(async(req:Request)=>{
         {command:"coverage",description:"Аудит покрытия спутниковых источников"},
         {command:"search",description:"Поиск событий по фильтрам"},
         {command:"analytics",description:"Сводная аналитика 24/168/720 ч"},
+        {command:"priority",description:"События по приоритету"},
         {command:"satellite",description:"Sentinel-2 до/после и NBR/NDVI"},
         {command:"osint",description:"Внешний OSINT по событию"},
         {command:"geo",description:"Гео- и инфраструктурный OSINT"},
@@ -811,6 +843,7 @@ Deno.serve(async(req:Request)=>{
       state.commands_v13=true;
       state.commands_v14=true;
       state.commands_v15=true;
+      state.commands_v16=true;
     }
 
     if(mode==="cron"){

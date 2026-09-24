@@ -20,7 +20,8 @@ const activeKeyboard={
   keyboard:[
     [{text:"🔥 Последние события"},{text:"🔎 Поиск"}],
     [{text:"📊 Статистика"},{text:"📈 Аналитика"}],
-    [{text:"📑 Досье"},{text:"🗺 Гео/инфра"}],
+    [{text:"🚦 Приоритет"},{text:"📑 Досье"}],
+    [{text:"🗺 Гео/инфра"}],
     [{text:"👤 Мой доступ"}]
   ],
   resize_keyboard:true
@@ -90,6 +91,29 @@ async function analytics(sb:any,hours:number){
   if(error)throw error;
   return data??{};
 }
+async function priorityEvents(sb:any,hours=24,minScore=0){
+  const {data,error}=await sb.rpc("firewatch_priority_events",{p_hours:hours,p_limit:12,p_min_score:minScore})
+    .abortSignal(AbortSignal.timeout(5000));
+  if(error)throw error;
+  return data??{count:0,events:[]};
+}
+function priorityText(d:any,hours:number){
+  const ev:any[]=Array.isArray(d?.events)?d.events:[];
+  const lines=["🚦 Приоритет событий • "+hours+" ч","Показано: "+ev.length,""];
+  for(const e of ev){
+    const icon=e.priority_level==="high"?"🔴":e.priority_level==="elevated"?"🟠":e.priority_level==="normal"?"🟡":"⚪";
+    lines.push(
+      icon+" #"+String(e.id??"").slice(0,8)+" • "+String(e.oblast??"—")+" • "+Number(e.priority_score??0)+"/100",
+      "FRP "+(e.frp_latest_avg==null?"—":Number(e.frp_latest_avg).toFixed(1)+" МВт")+" • obs "+Number(e.observation_count??0)+" • platforms "+Number(e.multisource_count??0),
+      (e.nearest_place_name?String(e.nearest_place_name)+(e.nearest_place_distance_km==null?"":" • "+Number(e.nearest_place_distance_km).toFixed(1)+" км"):"")+"",
+      "/dossier "+String(e.id??"").slice(0,8),
+      ""
+    );
+  }
+  if(!ev.length)lines.push("Событий в выбранном окне нет.");
+  lines.push("Баллы — только для очередности просмотра; не определяют причину или характер события.");
+  return lines.join("\n").slice(0,3900);
+}
 async function geoContext(sb:any,q:string){
   const {data,error}=await sb.rpc("firewatch_geo_context",{p_query:q});
   if(error)throw error;
@@ -156,7 +180,7 @@ function dossierTextClient(d:any){
   if(!d)return "📑 EVENT OSINT DOSSIER\n\nСобытие не найдено или досье ещё не сформировано.";
   const e=d.event??{},sat=d.satellite??{},surf=d.satellite_surface??{},atm=d.atmosphere??{},geo=d.geospatial??{},
         inf=d.infrastructure??{},ground=d.ground??{},ext=d.external_osint??{},pub=d.public_osint??{},
-        air=d.air_threat_context??{},hist=d.history??{};
+        air=d.air_threat_context??{},hist=d.history??{},pri=d.priority??{};
   const flags:string[]=Array.isArray(d.context_flags)?d.context_flags:[];
   const classes:string[]=Array.isArray(d.evidence_classes)?d.evidence_classes:[];
   const infra:any[]=Array.isArray(inf.features)?inf.features:[];
@@ -170,6 +194,7 @@ function dossierTextClient(d:any){
     "Наблюдений: "+Number(e.observation_count??0)+" • спутниковых платформ: "+Number(sat.source_count??0),
     "Источники: "+declared,
     "Уверенность детекции: "+String(e.confidence_label??e.confidence_level??"—"),
+    "🚦 Приоритет просмотра: "+Number(pri.score??0)+"/100 • "+String(pri.label??pri.level??"—"),
     "",
     "🔥 FRP max: "+dossierNumClient(sat.frp_max_mw,1)+" МВт • avg: "+dossierNumClient(sat.frp_avg_mw,1)+" МВт • тренд: "+String(sat.frp_trend??"—"),
     "Кластер: "+(sat.cluster_diameter_m==null?"—":Math.round(Number(sat.cluster_diameter_m))+" м"),
@@ -331,6 +356,7 @@ async function bootstrapWebhook(sb:any,token:string,secret:string,url:string){
   await tg(token,"setMyCommands",{commands:[
     {command:"start",description:"Регистрация / открыть меню"},
     {command:"latest",description:"Последние события"},
+    {command:"priority",description:"События по приоритету"},
     {command:"search",description:"Поиск по ID или региону"},
     {command:"event",description:"Карточка события"},
     {command:"dossier",description:"OSINT-досье события"},
@@ -485,6 +511,16 @@ Deno.serve(async(req:Request)=>{
       const d=await searchEvents(sb,{limit:8});
       await countRequest(sb,userId);
       await tg(token,"sendMessage",{chat_id:chatId,text:searchText(d,"🔥 Последние события"),reply_markup:activeKeyboard});
+      return json({ok:true,processed:1});
+    }
+
+    if(low==="🚦 приоритет"||low.startsWith("/priority")){
+      const parts=raw.split(/\s+/);
+      const hours=low==="🚦 приоритет"?24:parsePeriod(parts[1]??"24h",24);
+      const minScore=low==="🚦 приоритет"?0:Math.max(0,Math.min(100,Number(parts[2]??0)||0));
+      const d=await priorityEvents(sb,hours,minScore);
+      await countRequest(sb,userId);
+      await tg(token,"sendMessage",{chat_id:chatId,text:priorityText(d,hours),reply_markup:activeKeyboard});
       return json({ok:true,processed:1});
     }
 
