@@ -126,9 +126,13 @@ async function gdeltItems(e:any){
   })).filter((x:any)=>x.title&&x.link);
   return {q,items};
 }
-function mapOblastName(name:string,rows:any[]){
-  const n=norm(name).replace(/^м\s+/,"").replace(/\s+область$/,"");
-  if(n==="київ"||n==="kyiv")return rows.find((x:any)=>x.name_uk==="Київ")?.id??null;
+function mapOblastName(nameUk:string,nameEn:string,rows:any[]){
+  const rawUk=norm(nameUk),rawEn=norm(nameEn);
+  if(/^м\s+київ$/.test(rawUk)||/^м\.\s*київ$/.test(rawUk))return rows.find((x:any)=>x.name_uk==="Київ")?.id??null;
+  const ukBase=rawUk.replace(/^м\.?\s*/,"").replace(/\s+область$/,"");
+  const enBase=rawEn.replace(/\s+oblast$/,"");
+  const direct=rows.find((x:any)=>norm(x.name_uk)===ukBase||norm(x.name_uk).replace(/\s+область$/,"")===ukBase);
+  if(direct)return direct.id??null;
   const translit:Record<string,string>={
     "vinnytsia":"Вінницька","volyn":"Волинська","dnipropetrovsk":"Дніпропетровська","donetsk":"Донецька",
     "zhytomyr":"Житомирська","zakarpattia":"Закарпатська","zaporizhzhia":"Запорізька","ivano frankivsk":"Івано-Франківська",
@@ -137,9 +141,9 @@ function mapOblastName(name:string,rows:any[]){
     "kharkiv":"Харківська","kherson":"Херсонська","khmelnytskyi":"Хмельницька","cherkasy":"Черкаська",
     "chernivtsi":"Чернівецька","chernihiv":"Чернігівська"
   };
-  const uk=translit[n];
+  const uk=translit[enBase];
   if(uk)return rows.find((x:any)=>x.name_uk===uk)?.id??null;
-  return rows.find((x:any)=>norm(x.name_uk).replace(/\s+область$/,"")===n||norm(x.name_uk)===n)?.id??null;
+  return null;
 }
 async function updateAlerts(sb:any,events:any[],oblasts:any[]){
   const data=JSON.parse(await fetchText(ALERTS_URL));
@@ -150,7 +154,7 @@ async function updateAlerts(sb:any,events:any[],oblasts:any[]){
   await inBatches(states,5,async(st:any)=>{
     try{
       const sid=Number(st.id);if(!Number.isFinite(sid))return;
-      const oid=mapOblastName(String(st.name_en??st.name??""),oblasts);
+      const oid=mapOblastName(String(st.name??""),String(st.name_en??""),oblasts);
       const changed=safeDate(st.changed);
       const {data:old,error:oldErr}=await sb.from("air_alert_current").select("alert,changed_at").eq("provider_state_id",sid).maybeSingle();
       if(oldErr)throw oldErr;

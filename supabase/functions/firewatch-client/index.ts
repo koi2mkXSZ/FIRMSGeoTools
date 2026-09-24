@@ -99,7 +99,7 @@ async function deepOsint(sb:any,q:string){
 }
 function deepOsintText(d:any){
   if(!d)return "🧠 Deep OSINT\n\nСобытие не найдено.";
-  const e=d.event??{},s=d.summary??{},eff=d.effis??{},sem=d.semantic??{},ss=sem.summary??{},src:any[]=Array.isArray(d.sources)?d.sources:[],tl:any[]=Array.isArray(d.timeline)?d.timeline:[];
+  const e=d.event??{},s=d.summary??{},eff=d.effis??{},air=d.air_context??{},al=air.air_alert??{},th=air.public_air_threat_context??{},sem=d.semantic??{},ss=sem.summary??{},src:any[]=Array.isArray(d.sources)?d.sources:[],tl:any[]=Array.isArray(d.timeline)?d.timeline:[];
   const items=Number(ss.items??0),providers=Number(ss.providers??0),classes=Number(ss.source_classes??0);
   const geoSupported=Number(ss.geo_supported??0),duplicates=Number(ss.duplicate_items??0),divergences=Number(ss.divergences??0);
   const corr=String(s.corroboration_level??"none");
@@ -120,6 +120,20 @@ function deepOsintText(d:any){
   }else{
     lines.push("🌲 EFFIS: "+String(eff.status??"—")+" • FWI "+(eff.fwi_value==null?"—":Number(eff.fwi_value).toFixed(1))+" • active "+Number(eff.active_fire_count??0)+" • burnt-area "+Number(eff.burnt_area_count??0),"");
   }
+  const alertLabel:Record<string,string>={
+    during_alert:"тревога действовала во время события",
+    alert_start_within_30m:"начало тревоги в пределах ±30 мин",
+    alert_start_within_2h:"начало тревоги в пределах ±2 ч",
+    no_nearby_alert:"близкой тревоги не обнаружено",
+    history_unavailable:"история тревог для времени события недоступна"
+  };
+  lines.push("✈️ Воздушный контекст");
+  lines.push("Тревоги: "+String(alertLabel[String(al.relation??"")]??al.relation??"—"));
+  if(Boolean(th.present)){
+    const types=Array.isArray(th.threat_types)&&th.threat_types.length?th.threat_types.join(", "):"тип не указан";
+    lines.push("Публичный air-threat context: есть • "+types+" • "+String(th.time_relation??"—"));
+  }else lines.push("Публичный air-threat context: не найден");
+  lines.push("");
   if(src.length){
     lines.push("Источники Fusion:");
     for(const x of src.slice(0,8))lines.push("• "+String(x.label??x.source)+" • "+String(x.source_class??"—")+" • max "+Number(x.max_relevance??0)+"/100 • "+Number(x.evidence_count??0)+" evidence");
