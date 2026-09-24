@@ -1158,7 +1158,7 @@ Deno.serve(async(req:Request)=>{
     }
     if(low.startsWith("/objects_csv")){
       const q=raw.split(/\s+/).slice(1).join(" ").trim(),p=parseRegionalArgs(q);
-      if(!p){await tg(token,"sendMessage",{chat_id:chatId,text:"Использование: /objects_csv <область> <категория>\nПример: /objects_csv Полтавская область АЗС",reply_markup:activeKeyboard});return json({ok:true,processed:1})}
+      if(!p){await tg(token,"sendMessage",{chat_id:chatId,text:"Использование: /objects_csv <область> <объект/категория>\nПример: /objects_csv Полтавская область АЗС",reply_markup:activeKeyboard});return json({ok:true,processed:1})}
       try{
         const d=await regionalSearchRequest(p);await countRequest(sb,userId);
         const csv=regionalCsv(d),name=String(d?.oblast?.code??d?.oblast_code??"region")+"-"+String(d?.category_key??"objects")+".csv";
@@ -1168,7 +1168,7 @@ Deno.serve(async(req:Request)=>{
     }
     if(low.startsWith("/objects")){
       const q=raw.split(/\s+/).slice(1).join(" ").trim(),p=parseRegionalArgs(q);
-      if(!p){await tg(token,"sendMessage",{chat_id:chatId,text:"Использование: /objects <область> <категория>\nПример: /objects Полтавская область АЗС",reply_markup:activeKeyboard});return json({ok:true,processed:1})}
+      if(!p){await tg(token,"sendMessage",{chat_id:chatId,text:"Использование: /objects <область> <объект/категория>\nПример: /objects Полтавская область АЗС",reply_markup:activeKeyboard});return json({ok:true,processed:1})}
       try{
         const d=await regionalSearchRequest(p);await countRequest(sb,userId);
         await tg(token,"sendMessage",{chat_id:chatId,text:regionalSearchText(d),reply_markup:activeKeyboard,disable_web_page_preview:true});
