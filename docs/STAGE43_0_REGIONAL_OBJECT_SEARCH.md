@@ -387,3 +387,202 @@ Production versions:
 - `firewatch-watchdog`: ACTIVE v39.
 
 Web Dashboard production selector includes the three new precise infrastructure categories.
+
+
+## Stage 43.0.3 — Universal Object Resolver
+
+Regional object search is no longer limited to the curated category list.
+
+### Resolution pipeline
+
+For every query, `firewatch-regional-search` now resolves intent in this order:
+
+1. canonical category / exact alias;
+2. canonical category contained in a longer qualified phrase;
+3. fuzzy category match with confidence + margin guards;
+4. semantic OSM hint for common infrastructure terms;
+5. safe generic OSM name/tag search;
+6. explicit clarification for intentionally ambiguous short terms.
+
+The Telegram bots pass the raw command tail to the backend. They do not maintain their own category whitelist.
+
+### Free-form region split
+
+The region resolver can split an exact region alias from either side of an unknown object query:
+
+- `Полтавская область нефтебаза`;
+- `нефтебаза Полтавская область`;
+- RU / UK / EN region aliases;
+- canonical `UAxx` codes.
+
+CI validates both prefix and suffix wrapping for every one of the 1631 normalized region aliases.
+
+Production self-test result:
+
+- DB regions: 27;
+- alias regions: 27;
+- region aliases: 1631;
+- failed resolutions: 0;
+- split failures: 0.
+
+### Semantic OSM hints
+
+Stage 43.0.3 includes conservative tag mappings for common infrastructure terms that often do not appear literally in OSM names:
+
+- нефтебаза / нафтобаза / oil depot;
+- трансформатор;
+- элеватор / зернохранилище;
+- водонапорная башня;
+- карьер;
+- насосная станция;
+- очистные сооружения;
+- полигон отходов / свалка;
+- аэродром;
+- порт / гавань;
+- мост;
+- дамба / плотина;
+- трубопровод;
+- нефтегазовая скважина.
+
+Current production catalog:
+
+- curated categories: 15;
+- curated aliases: 127;
+- semantic hints: 14;
+- semantic hint aliases: 101;
+- duplicate curated aliases: 0;
+- duplicate hint aliases: 0.
+
+### Safe generic fallback
+
+If no curated category or semantic hint matches, the object phrase is normalized and searched only against a fixed whitelist of public OSM tag fields.
+
+User text is **not** inserted into arbitrary SQL syntax.
+
+Generic search:
+
+- normalizes Unicode and punctuation;
+- limits the query to 80 characters for SQL matching;
+- uses at most 6 significant tokens;
+- searches only whitelisted tag keys such as name, brand, operator, amenity, shop, industrial, man_made, power, building, landuse, water, railway, aeroway, telecom, substance and related public OSM fields;
+- generates a deterministic cache key for each free-text query.
+
+Example production smoke:
+
+`Полтавская область WOG`
+
+Result:
+
+- HTTP 200;
+- mode `generic`;
+- 13 objects;
+- OSM active;
+- truncated=false.
+
+### Qualified known categories
+
+Known categories may contain qualifiers.
+
+Example:
+
+`Полтавская область трансформаторные подстанции 110 кВ`
+
+Production result:
+
+- HTTP 200;
+- mode `qualified`;
+- canonical base category `power_substation`;
+- `110 кВ` converted to an OSM voltage filter for `110000` V;
+- 74 objects;
+- truncated=false.
+
+Other residual text after a known category is applied as a safe public OSM name/tag qualifier.
+
+### Ambiguity handling
+
+The resolver does not silently guess for intentionally ambiguous short terms.
+
+Example:
+
+`Полтавская область станция`
+
+returns HTTP 409 and asks the caller to choose among:
+
+- Электроподстанции;
+- Электростанции;
+- Транспортные узлы;
+- АЗС.
+
+Both Telegram bots display this as a clarification message instead of a silent failure.
+
+### Oil-depot precision acceptance
+
+The first semantic smoke exposed a false-positive risk from generic OSM `industrial=oil` tagging.
+
+The hint was tightened to require:
+
+- an explicit oil-depot name;
+- or storage-tank geometry with petroleum/fuel substance tagging;
+- or oil/petroleum/fuel industrial tagging combined with a storage-tank object.
+
+Final production query:
+
+`Полтавская область нефтебаза`
+
+Result:
+
+- HTTP 200;
+- mode `semantic_hint`;
+- 3 objects;
+- all three explicitly named as `Нафтобаза` / нефтебаза in the returned public OSM data;
+- truncated=false;
+- errors=[].
+
+### Interfaces
+
+Telegram client and admin bots support arbitrary object names through the existing commands:
+
+- `/objects <область> <объект/категория>`;
+- `/objects_csv <область> <объект/категория>`.
+
+Examples:
+
+- `/objects Полтавская область нефтебаза`;
+- `/objects Полтавская область элеватор`;
+- `/objects Полтавская область водонапорная башня`;
+- `/objects Полтавская область WOG`;
+- `/objects Полтавская область трансформаторные подстанции 110 кВ`.
+
+The production Web Dashboard now uses a free-text object field with datalist suggestions instead of a closed category select.
+
+Dashboard production commit:
+
+`6b7b095d2a2ab7bb68c352fc731e93927b9c062d`
+
+Production Pages deployment:
+
+`36035919030` — SUCCESS.
+
+The deployed Dashboard inline JavaScript also passed standalone syntax validation.
+
+### Security and health
+
+- direct unauthenticated regional request: HTTP 401;
+- authenticated self-test: HTTP 200;
+- region split failures: 0;
+- category alias collisions: 0;
+- semantic-hint alias collisions: 0;
+- watchdog after self-test reports no `REGIONAL_ALIAS_*` or `REGIONAL_CATEGORY_*` issue.
+
+Unrelated watchdog issues may still be reported independently by other GeoWatch layers.
+
+### Production versions
+
+- `firewatch-regional-search`: ACTIVE v12;
+- `firewatch-client`: ACTIVE v45;
+- `firewatch-admin`: ACTIVE v90;
+- `firewatch-watchdog`: ACTIVE v39.
+
+### Status
+
+**Stage 43.0.3 Universal Object Resolver — production-ready.**
