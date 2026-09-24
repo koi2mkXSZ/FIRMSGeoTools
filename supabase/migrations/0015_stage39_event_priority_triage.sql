@@ -109,7 +109,7 @@ begin
     perform public.firewatch_refresh_event_priority(new.fire_event_id);
   end if;
   return new;
-end; $;
+end; $$;
 revoke all on function public.firewatch_priority_trigger() from public,anon,authenticated;
 
 drop trigger if exists fire_events_priority_refresh on public.fire_events;
