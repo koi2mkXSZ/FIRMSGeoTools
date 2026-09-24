@@ -202,7 +202,7 @@ function httpsUrl(v:any){
   const s=String(v??"").trim();
   try{const u=new URL(s);return u.protocol==="https:"?u.toString():null}catch{return null}
 }
-async function sendVisualPreviews(token:string,chatId:number,d:any){
+async function sendVisualPreviews(token:string,chatId:string|number,d:any){
   const vis=d?.visual_context??{},pano=vis?.panoramax??{},oam=vis?.openaerialmap??{};
   const candidates:any[]=[];
   const pItems:any[]=Array.isArray(pano?.items)?pano.items:[];
