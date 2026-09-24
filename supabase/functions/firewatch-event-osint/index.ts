@@ -47,7 +47,8 @@ function relevance(title:string,pub:string|null,e:any,forcedLocation=false){
   let score=0;const reasons:string[]=[];
   if(incident(title)){score+=40;reasons.push("incident_keyword")}
   const lm=locationMatch(title,e);
-  if(lm.matched||forcedLocation){score+=35;reasons.push(lm.matched?String(lm.kind):"event_scoped_query")}
+  if(lm.matched){score+=35;reasons.push(String(lm.kind))}
+  else if(forcedLocation){reasons.push("event_scoped_query_unverified")}
   if(pub){
     const dt=Math.abs(Date.parse(pub)-Date.parse(String(e.last_seen)))/3600000;
     if(Number.isFinite(dt)&&dt<=12){score+=25;reasons.push("time_within_12h")}
@@ -241,8 +242,8 @@ Deno.serve(async(req:Request)=>{
       const g=await gdeltItems(e);gdeltQueries++;
       for(const it of g.items){
         const rel=relevance(it.title+" "+it.description,it.published,e,true);
-        if(rel.score>=65){
-          candidates.push({...it,relevance_score:rel.score,match_basis:{reasons:rel.reasons,location:rel.location,method:"event_scoped_gdelt",query:g.q},payload:it.payload??{}});
+        if(rel.location.matched&&rel.score>=65){
+          candidates.push({...it,relevance_score:rel.score,match_basis:{reasons:rel.reasons,location:rel.location,method:"event_scoped_gdelt",query:g.q,geo_gate:"explicit_title_location_match"},payload:it.payload??{}});
         }
       }
       newsSeen+=candidates.length;
