@@ -16,14 +16,22 @@ async function tg(token:string,method:string,body:unknown){
   if(!r.ok||!d?.ok)throw new Error(`Telegram ${method}: ${d?.description??r.status}`);
   return d.result;
 }
+async function tgTextDocument(token:string,chatId:string,text:string,fileName:string,caption:string){
+  const form=new FormData();
+  form.append("chat_id",chatId);
+  form.append("document",new Blob([text],{type:"text/csv; charset=utf-8"}),fileName);
+  form.append("caption",caption.slice(0,900));
+  const r=await fetch(`https://api.telegram.org/bot${token}/sendDocument`,{method:"POST",body:form,signal:AbortSignal.timeout(30000)});
+  const d=await r.json();if(!r.ok||!d?.ok)throw new Error(`Telegram sendDocument: ${d?.description??r.status}`);return d.result;
+}
 const activeKeyboard={
   keyboard:[
     [{text:"🔥 Последние события"},{text:"🔎 Поиск"}],
     [{text:"📊 Статистика"},{text:"📈 Аналитика"}],
     [{text:"🚦 Приоритет"},{text:"🧠 Deep OSINT"}],
     [{text:"📑 Досье"},{text:"🗺 Гео/инфра"}],
-    [{text:"🧭 Area OSINT"},{text:"🛰 Satellite"}],
-    [{text:"👤 Мой доступ"}]
+    [{text:"🧭 Area OSINT"},{text:"🏭 Объекты области"}],
+    [{text:"🛰 Satellite"},{text:"👤 Мой доступ"}]
   ],
   resize_keyboard:true
 };
@@ -505,6 +513,8 @@ async function bootstrapWebhook(sb:any,token:string,secret:string,url:string){
     {command:"latest",description:"Последние события"},
     {command:"priority",description:"События по приоритету"},
     {command:"search",description:"Поиск по ID или региону"},
+    {command:"objects",description:"Объекты по области и категории"},
+    {command:"objects_csv",description:"CSV объектов области"},
     {command:"event",description:"Карточка события"},
     {command:"dossier",description:"OSINT-досье события"},
     {command:"deeposint",description:"Глубокая OSINT-корреляция"},
@@ -543,6 +553,58 @@ async function areaReportRequest(payload:any){
   });
   const t=await r.text();let d:any;try{d=JSON.parse(t)}catch{throw new Error("Area Report invalid response")}
   if(!r.ok||!d?.ok)throw new Error(String(d?.error??("HTTP "+r.status)));return d;
+}
+async function regionalSearchRequest(payload:any){
+  const u=Deno.env.get("SUPABASE_URL"),k=Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");if(!u||!k)throw new Error("missing Supabase env");
+  const r=await fetch(u+"/functions/v1/firewatch-regional-search",{method:"POST",headers:{"content-type":"application/json","authorization":"Bearer "+k},body:JSON.stringify(payload),signal:AbortSignal.timeout(90000)});
+  const t=await r.text();let d:any;try{d=JSON.parse(t)}catch{throw new Error("Regional Search invalid response")}
+  if(!r.ok||!d?.ok)throw new Error(String(d?.error??("HTTP "+r.status)));return d;
+}
+const REGIONAL_ALIASES:[string,string][]=[
+ ["пожарные части","fire_station"],["пожежні частини","fire_station"],["fire stations","fire_station"],
+ ["энергообъекты","energy"],["вышки связи","telecom"],["транспортные узлы","transport"],
+ ["промышленные объекты","industrial"],["учебные заведения","school"],
+ ["автозаправки","fuel"],["заправки","fuel"],["gas stations","fuel"],["petrol stations","fuel"],
+ ["супермаркеты","supermarket"],["супермаркети","supermarket"],["supermarkets","supermarket"],
+ ["больницы","hospital"],["лікарні","hospital"],["hospitals","hospital"],["clinics","hospital"],
+ ["аптеки","pharmacy"],["pharmacies","pharmacy"],["склады","warehouse"],["склади","warehouse"],["warehouses","warehouse"],
+ ["полиция","police"],["поліція","police"],["police","police"],["телеком","telecom"],["telecom","telecom"],
+ ["промышленность","industrial"],["промисловість","industrial"],["industrial","industrial"],
+ ["транспорт","transport"],["transport","transport"],["энергетика","energy"],["енергетика","energy"],["energy","energy"],
+ ["школы","school"],["школи","school"],["schools","school"],["hospital","hospital"],["clinic","hospital"],
+ ["pharmacy","pharmacy"],["warehouse","warehouse"],["supermarket","supermarket"],["fire_station","fire_station"],
+ ["fuel","fuel"],["азс","fuel"]
+];
+function parseRegionalArgs(v:string){
+  const raw=String(v??"").trim(),low=raw.toLowerCase();
+  for(const [alias,key] of [...REGIONAL_ALIASES].sort((a,b)=>b[0].length-a[0].length)){
+    const i=low.indexOf(alias.toLowerCase());if(i<0)continue;
+    const oblast=(raw.slice(0,i)+" "+raw.slice(i+alias.length)).replace(/\s+/g," ").trim();
+    if(oblast)return{oblast,category:key};
+  }
+  return null;
+}
+function regionalCsv(d:any){
+  const cols=["No","Name","Brand","Operator","Settlement","Address","Latitude","Longitude","Sources","Source count","Resolution status","Confidence","Wikidata QID"];
+  const cell=(v:any)=>{const s=String(v??"");return /[",\n\r;]/.test(s)?'"'+s.replace(/"/g,'""')+'"':s};
+  const rows=(Array.isArray(d?.objects)?d.objects:[]).map((x:any,i:number)=>[i+1,x.canonical_name,x.brand,x.operator,x.settlement,x.address,Number(x.latitude).toFixed(6),Number(x.longitude).toFixed(6),(Array.isArray(x.sources)?x.sources:[]).map((s:any)=>s.source+":"+s.source_id).join(" | "),x.source_count,x.resolution_status,x.resolution_confidence,x.wikidata_qid]);
+  return "\uFEFF"+[cols,...rows].map(r=>r.map(cell).join(",")).join("\r\n");
+}
+function regionalSearchText(d:any){
+  const s=d?.summary??{},src=d?.source_status??{},xs:any[]=Array.isArray(d?.objects)?d.objects:[];
+  const lines=[
+    "🏭 REGIONAL OBJECT SEARCH",
+    String(d?.oblast?.name_uk??d?.oblast_name??"—")+" • "+String(d?.category_label??d?.category_key??"—"),
+    "Найдено: "+Number(s.resolved_objects??xs.length)+" • multi-source "+Number(s.multi_source??0)+" • status "+String(d?.status??"—")+(d?.cached?" • cache":" • fresh"),
+    "Источники: OSM "+Number(s.osm_objects??0)+" • Overture "+Number(s.overture_objects??0)+" • Wikidata "+Number(s.wikidata_objects??0),
+    ""
+  ];
+  xs.slice(0,20).forEach((x:any,i:number)=>lines.push((i+1)+". "+String(x.canonical_name??"—")+(x.brand&&x.brand!==x.canonical_name?" • "+String(x.brand):"")+(x.settlement?" • "+String(x.settlement):"")+(x.address?" • "+String(x.address):"")+"\n   "+Number(x.latitude).toFixed(5)+", "+Number(x.longitude).toFixed(5)+" • "+Number(x.source_count??0)+" src • "+String(x.resolution_status??"—")));
+  if(xs.length>20)lines.push("","Показаны первые 20 из "+xs.length+". Полный список: /objects_csv <область> <категория>");
+  if(Boolean(s.truncated))lines.push("","⚠️ Достигнут лимит источника/выдачи: результат может быть неполным.");
+  if(Array.isArray(d?.errors)&&d.errors.length)lines.push("","⚠️ Partial: "+d.errors.slice(0,3).join(" | "));
+  lines.push("","Данные — инвентаризация публичных источников; полнота зависит от картографирования и актуальности источников.");
+  return lines.join("\n").slice(0,3900);
 }
 function areaReportText(d:any){
   const r=d?.report??{},inf=r.infrastructure??{},sum=inf.summary??{},counts=sum.by_category??{},gh=r.ghsl??{},ent=r.entities??{},es=ent.summary??{},reg=r.official_registry??{},os=r.osint??{},cov=r.coverage??{};
@@ -955,7 +1017,7 @@ Deno.serve(async(req:Request)=>{
     }
 
     if(low==="🔎 поиск"){
-      await tg(token,"sendMessage",{chat_id:chatId,text:["🔎 Поиск","","По ID:","/search aee43b0d","","По региону:","/search Київська","","По координатам и радиусу:","/nearby 50.4501 30.5234 25","/nearby 50.4501, 30.5234, 25","/nearby 50.4501; 30.5234; 25","","История до 365 дней:","/history 50.4501 30.5234 5","","Area OSINT:","/area 46.61212 31.55511 5000","/area 19be809d 5000","/infra 19be809d 2000","/entity Q30017836","/registry 3717e647","","OSINT layers:","/osint 19be809d","/ground 19be809d","/satellite 19be809d","/latency 19be809d","","System read-only:","/events • /sources • /coverage • /integrity • /archive","","Координаты вводятся вручную. Передача геопозиции Telegram отключена."].join("\n"),reply_markup:activeKeyboard});
+      await tg(token,"sendMessage",{chat_id:chatId,text:["🔎 Поиск","","По ID:","/search aee43b0d","","По региону:","/search Київська","","По координатам и радиусу:","/nearby 50.4501 30.5234 25","/nearby 50.4501, 30.5234, 25","/nearby 50.4501; 30.5234; 25","","История до 365 дней:","/history 50.4501 30.5234 5","","Area OSINT:","/area 46.61212 31.55511 5000","/area 19be809d 5000","/infra 19be809d 2000","/entity Q30017836","/registry 3717e647","","Объекты по области:","/objects Полтавская область АЗС","/objects Київська аптеки","/objects_csv Полтавская область АЗС","","OSINT layers:","/osint 19be809d","/ground 19be809d","/satellite 19be809d","/latency 19be809d","","System read-only:","/events • /sources • /coverage • /integrity • /archive","","Координаты вводятся вручную. Передача геопозиции Telegram отключена."].join("\n"),reply_markup:activeKeyboard});
       return json({ok:true,processed:1});
     }
 
@@ -1098,8 +1160,27 @@ Deno.serve(async(req:Request)=>{
       await tg(token,"sendMessage",{chat_id:chatId,text:"🧭 Area OSINT\n\nПо событию:\n/infra <event-id> [radius_m]\n\nПо координатам:\n/area <lat> <lon> [radius_m]\n\nПример:\n/area 46.61212 31.55511 2000",reply_markup:activeKeyboard});
       return json({ok:true,processed:1});
     }
+    if(low==="🏭 объекты области"){
+      await tg(token,"sendMessage",{chat_id:chatId,text:"🏭 Объекты области\n\nПоиск по полигону области и категории:\n/objects Полтавская область АЗС\n/objects Київська аптеки\n/objects Львівська школы\n\nПолный CSV:\n/objects_csv Полтавская область АЗС\n\nКатегории: АЗС, больницы, аптеки, школы, пожарные части, полиция, энергетика, промышленность, склады, супермаркеты, телеком, транспорт.",reply_markup:activeKeyboard});
+      return json({ok:true,processed:1});
+    }
     if(low==="🛰 satellite"){
       await tg(token,"sendMessage",{chat_id:chatId,text:"🛰 Satellite Evidence\n\nУкажите ID события:\n/satellite 19be809d",reply_markup:activeKeyboard});
+      return json({ok:true,processed:1});
+    }
+    if(low.startsWith("/objects_csv")){
+      const q=raw.split(/\s+/).slice(1).join(" ").trim(),p=parseRegionalArgs(q);
+      if(!p){await tg(token,"sendMessage",{chat_id:chatId,text:"Использование: /objects_csv <область> <категория>\nПример: /objects_csv Полтавская область АЗС",reply_markup:activeKeyboard});return json({ok:true,processed:1})}
+      const d=await regionalSearchRequest(p);await countRequest(sb,userId);
+      const csv=regionalCsv(d),name=String(d?.oblast?.code??d?.oblast_code??"region")+"-"+String(d?.category_key??p.category)+".csv";
+      await tgTextDocument(token,chatId,csv,name,"GeoWatch • "+String(d?.oblast?.name_uk??d?.oblast_name??p.oblast)+" • "+String(d?.category_label??p.category)+" • "+Number(d?.summary?.resolved_objects??0)+" объектов");
+      return json({ok:true,processed:1});
+    }
+    if(low.startsWith("/objects")){
+      const q=raw.split(/\s+/).slice(1).join(" ").trim(),p=parseRegionalArgs(q);
+      if(!p){await tg(token,"sendMessage",{chat_id:chatId,text:"Использование: /objects <область> <категория>\nПример: /objects Полтавская область АЗС",reply_markup:activeKeyboard});return json({ok:true,processed:1})}
+      const d=await regionalSearchRequest(p);await countRequest(sb,userId);
+      await tg(token,"sendMessage",{chat_id:chatId,text:regionalSearchText(d),reply_markup:activeKeyboard,disable_web_page_preview:true});
       return json({ok:true,processed:1});
     }
     if(low.startsWith("/infra")){
