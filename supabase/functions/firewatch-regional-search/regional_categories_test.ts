@@ -99,3 +99,21 @@ Deno.test("Stage 43.1 explicit filters override parsed filters",()=>{
  assert(merged.settlement==="Кременчуг","explicit settlement override failed");
  assert(merged.brand==="WOG","unrelated parsed filter lost");
 });
+
+
+Deno.test("Stage 43.1 post-enrichment filters parse",()=>{
+ const x=extractRegionalFilters('АЗС city:Полтава source:OSM confidence:90 has_address:yes');
+ assert(x.filters.settlement==="Полтава","settlement filter");
+ assert(x.filters.source==="OSM","source filter");
+ assert(x.filters.min_confidence==="90","confidence filter");
+ assert(x.filters.has_address==="yes","has_address filter");
+ const p=buildFilterPredicate(x.filters);
+ assert(!p.includes("addr:city"),"settlement must not be pre-filtered before spatial enrichment");
+});
+
+Deno.test("Stage 43.1 filter key includes post filters",()=>{
+ const p=resolveCategoryList(splitObjectExpression("АЗС")).resolutions;
+ const a=multiKey(p,{source:"OSM",min_confidence:"90",has_address:"yes"});
+ const b=multiKey(p,{source:"Wikidata",min_confidence:"90",has_address:"yes"});
+ assert(a!==b,"source post-filter must affect cache key");
+});
