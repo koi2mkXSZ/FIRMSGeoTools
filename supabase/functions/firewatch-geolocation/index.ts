@@ -72,22 +72,39 @@ async function overturePlaces(lat:number,lon:number){
 async function geonamesPlaces(lat:number,lon:number,username:string){
   const u=new URL("https://secure.geonames.org/findNearbyPlaceNameJSON");
   u.searchParams.set("lat",String(lat));u.searchParams.set("lng",String(lon));
-  u.searchParams.set("radius","15");u.searchParams.set("maxRows","20");u.searchParams.set("username",username);
+  u.searchParams.set("radius","15");u.searchParams.set("maxRows","20");
+  u.searchParams.set("lang","uk");u.searchParams.set("style","FULL");u.searchParams.set("localCountry","true");
+  u.searchParams.set("username",username);
   const d=await fetchJson(u.toString());
   if(d?.status?.message)throw new Error("GeoNames: "+String(d.status.message));
   const arr=Array.isArray(d?.geonames)?d.geonames:[];
-  return arr.map((x:any)=>({
-    geoname_id:x.geonameId??null,
-    name:x.name??null,
-    toponym_name:x.toponymName??null,
-    admin1:x.adminName1??null,
-    country:x.countryName??null,
-    feature_class:x.fcl??null,
-    feature_code:x.fcode??null,
-    population:Number(x.population??0),
-    distance_km:Number(x.distance??NaN),
-    lat:Number(x.lat),lon:Number(x.lng)
-  })).filter((x:any)=>Number.isFinite(x.lat)&&Number.isFinite(x.lon)).slice(0,15);
+  return arr.map((x:any)=>{
+    const localized=String(x.name??"").trim()||null;
+    const canonical=String(x.toponymName??"").trim()||null;
+    const altsRaw=Array.isArray(x.alternateNames)?x.alternateNames:[];
+    const alternate_names=[...new Set(
+      altsRaw.map((a:any)=>String(a?.name??a??"").trim())
+        .filter((v:string)=>v&&v!==localized&&v!==canonical)
+        .filter((v:string)=>!/^https?:\/\//i.test(v))
+        .filter((v:string)=>!/^Q\d+$/i.test(v))
+        .filter((v:string)=>!(/^[A-Z0-9_-]{3,12}$/.test(v)&&!/[a-zа-яіїєґ]/iu.test(v)))
+    )].slice(0,8);
+    return {
+      geoname_id:x.geonameId??null,
+      name:localized,
+      toponym_name:canonical,
+      alternate_names,
+      admin1:x.adminName1??null,
+      country:x.countryName??null,
+      feature_class:x.fcl??null,
+      feature_class_name:x.fclName??null,
+      feature_code:x.fcode??null,
+      feature_code_name:x.fcodeName??null,
+      population:Number(x.population??0),
+      distance_km:Number(x.distance??NaN),
+      lat:Number(x.lat),lon:Number(x.lng)
+    };
+  }).filter((x:any)=>Number.isFinite(x.lat)&&Number.isFinite(x.lon)).slice(0,15);
 }
 function backoffMin(n:number){return Math.min(720,30*Math.pow(2,Math.max(0,n-1)))}
 

@@ -148,7 +148,17 @@ function deepOsintText(d:any){
     lines.push("Overture: "+String(ov.status??"—")+" • ближайшие POI не найдены");
   }
   if(String(gn.status??"not_cached")==="waiting_username")lines.push("GeoNames: ожидает подключения username");
-  else if(Array.isArray(gn.places)&&gn.places.length)lines.push("GeoNames: "+gn.places.slice(0,3).map((p:any)=>String(p.name??p.toponym_name??"—")).join(", "));
+  else if(Array.isArray(gn.places)&&gn.places.length){
+    lines.push("GeoNames:");
+    for(const p of gn.places.slice(0,3)){
+      const nm=String(p.name??p.toponym_name??"—");
+      const canonical=p.toponym_name&&String(p.toponym_name)!==nm?" ("+String(p.toponym_name)+")":"";
+      const dist=Number.isFinite(Number(p.distance_km))?(Number(p.distance_km).toFixed(1)+" км"):"—";
+      const code=String(p.feature_code??"");
+      const type=code==="PPLA"?"административный центр":code==="PPLA2"?"адм. центр уровня 2":code==="PPLA3"?"адм. центр уровня 3":code==="PPLA4"?"адм. центр уровня 4":code==="PPL"?"населённый пункт":String(p.feature_code_name??p.feature_class_name??code??"место");
+      lines.push("• "+nm+canonical+" • "+dist+" • "+type);
+    }
+  }
   lines.push("");
 
   if(src.length){

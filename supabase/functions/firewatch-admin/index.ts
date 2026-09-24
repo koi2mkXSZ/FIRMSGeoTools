@@ -432,6 +432,7 @@ async function deepOsintText(sb:any,q?:string){
     `Public air-threat: ${th.present?"present":"none"} • ${Array.isArray(th.threat_types)?th.threat_types.join(", "):"—"} • ${th.time_relation??"—"}`,
     `Geolocation: Overture ${ov.status??"not_cached"} • release ${ov.release??"—"} • tiles ${Number(ov.tiles_ok??0)}/${Number(ov.tiles_total??0)} • places ${Array.isArray(ov.places)?ov.places.length:0}`,
     `GeoNames: ${gn.status??"not_cached"} • places ${Array.isArray(gn.places)?gn.places.length:0}`,
+    ...(Array.isArray(gn.places)?gn.places.slice(0,5).map((p:any)=>{const code=String(p.feature_code??"");const type=code==="PPLA"?"административный центр":code==="PPLA2"?"адм. центр уровня 2":code==="PPLA3"?"адм. центр уровня 3":code==="PPLA4"?"адм. центр уровня 4":code==="PPL"?"населённый пункт":String(p.feature_code_name??p.feature_class_name??code??"место");return `• ${p.name??p.toponym_name??"—"}${p.toponym_name&&p.toponym_name!==p.name?" ("+p.toponym_name+")":""} • ${Number.isFinite(Number(p.distance_km))?Number(p.distance_km).toFixed(1)+" км":"—"} • ${type}`;}):[]),
     ""
   ];
   if(src.length){

@@ -131,7 +131,9 @@ Deno.serve(async(req:Request)=>{
       for(const v of [p?.name,p?.locality]){const n=norm(v);if(n.length>=4)names.push(n)}
     }
     for(const p of Array.isArray(g.geonames_places)?g.geonames_places:[]){
-      for(const v of [p?.name,p?.toponym_name,p?.admin1]){const n=norm(v);if(n.length>=4)names.push(n)}
+      for(const v of [p?.name,p?.toponym_name,p?.admin1,...(Array.isArray(p?.alternate_names)?p.alternate_names:[])]){
+        const n=norm(v);if(n.length>=4)names.push(n)
+      }
     }
     return [String(g.fire_event_id),[...new Set(names)].sort((a:string,b:string)=>b.length-a.length).slice(0,80)];
   }));
