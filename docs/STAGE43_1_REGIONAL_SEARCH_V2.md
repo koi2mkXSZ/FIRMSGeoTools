@@ -250,6 +250,25 @@ Direct unauthenticated regional-search request returns HTTP 401.
 
 Dashboard access remains HMAC-signed and proxies to the service-role protected regional backend; service-role credentials are never sent to browser JavaScript.
 
+## Final production acceptance
+
+- `firewatch-regional-search`: ACTIVE v18.
+- `firewatch-client`: ACTIVE v49.
+- `firewatch-admin`: ACTIVE v95.
+- `firewatch-dashboard`: ACTIVE v13.
+- Database schema remains v39; Stage 43.1 requires no new schema migration.
+- Client bot bootstrap: HTTP 200, webhook enabled, pending updates 0, last error null.
+- Admin bot health: HTTP 200, webhook enabled, pending updates 0, last error null.
+- Admin command registry is at `commands_v19=true`; both bot menus include `/objects_geojson`.
+- Signed Dashboard Stage 43.1 settlement-filter smoke: HTTP 200, 61 matches, `radius_fallback=15 km`.
+- Direct unauthenticated regional backend request: HTTP 401.
+- Current `r43_1_3` Poltava fuel export: CSV 300 data rows; GeoJSON 300 Point features.
+- Production Dashboard commit: `7f0b892be0919ffc1a9e271d0a610f0b0e0f7e72`.
+- Production Dashboard Pages deployment: #36041984618 SUCCESS.
+- Dashboard inline JavaScript syntax validation: PASS.
+- Recovery Dashboard synchronized to FIRMSGeoTools in `f54c7667a4f428f72f53ec9be3fbee886d91b759`.
+- Exact recovery/source CI on that synchronized commit: #36042132813 SUCCESS.
+
 ## Status
 
-Production acceptance remains open until the final exact-main CI, bot redeploy/bootstrap and public/recovery Dashboard synchronization gates pass.
+**CLOSED / production-ready — 2026-09-24.**
