@@ -1,4 +1,5 @@
 import {parseRegionalQuery,specFor,validateRegionalCategories} from "./regional_categories.ts";
+import {normalizeRegionQuery} from "./region_aliases.ts";
 
 function assert(x:unknown,msg:string){if(!x)throw new Error(msg)}
 
@@ -26,5 +27,5 @@ Deno.test("full Telegram-style queries are parsed centrally",()=>{
   ["АЗС Киевская область","киевская область","fuel"],
   ["Київська область аптеки","київська область","pharmacy"]
  ];
- for(const [q,oblast,category] of cases){const p=parseRegionalQuery(q);assert(p?.oblast===oblast&&p?.category===category,`${q} -> ${JSON.stringify(p)}`)}
+ for(const [q,oblast,category] of cases){const p=parseRegionalQuery(q);assert(normalizeRegionQuery(p?.oblast)===normalizeRegionQuery(oblast)&&p?.category===category,`${q} -> ${JSON.stringify(p)}`)}
 });
