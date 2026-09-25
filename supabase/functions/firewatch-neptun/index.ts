@@ -123,7 +123,7 @@ Deno.serve(async(req:Request)=>{
     ballistic_threat:Boolean(data?.ballistic_threat),history_snapshots_attempted:normalized.length,
     history_snapshots_inserted:historyInserted,
     proximity_candidates:Number(correlation?.context_rows??0),closest_context_updates:Number(correlation?.event_count??0),
-    context_before_or_at_firms:Number(correlation?.before_or_at_firms??0),context_after_firms:Number(correlation?.after_firms??0),
+    context_before_or_at_firms:Number(correlation?.before_or_at_firms??0),context_after_firms_fallback:Number(correlation?.after_firms_fallback??0),
     match_radius_km:50,time_window_before_hours:6,time_window_after_minutes:30,correlation_mode:"historical_preferred",
     warnings:warnings.slice(-20),
     policy:"Public Neptun air-threat tracks are contextual evidence only. Historical snapshots are matched around FIRMS acquisition time; pre-FIRMS context is preferred. Spatial/temporal proximity does not establish causation.",
