@@ -3,6 +3,7 @@ import { createClient } from "@supabase/supabase-js";
 import { diceSimilarity as dice, normalizeRegionQuery as norm, resolveOblastRow, splitRegionObjectQuery, validateOblastAliases } from "./region_aliases.ts";
 import { REGIONAL_SPECS as SPECS, type RegionalSpec as Spec, buildFilterPredicate, extractRegionalFilters, mergeFilters, multiKey, normalizeFilters, parseRegionalQuery, resolveCategoryList, splitObjectExpression, validateRegionalCategories } from "./regional_categories.ts";
 import { applyObjectFilters, applySettlementTarget, enrichSettlements, resolveSettlementTarget, toGeoJson, type SettlementCandidate } from "./regional_enrichment.ts";
+import { applySpatialPlan, buildSpatialPlan, expandBboxM, spatialSummary, type SpatialPlan } from "./regional_spatial.ts";
 
 const POSTPASS="https://postpass.geofabrik.de/api/interpreter";
 const FUSED="https://www.fused.io/server/v1/realtime-shared/UDF_Overture_Maps_Example/run/tiles";
@@ -99,12 +100,111 @@ function resolve(rows:any[],s:Spec){
 }
 function csvCell(v:any){const s=String(v??"");return /[",\n\r;]/.test(s)?'"'+s.replace(/"/g,'""')+'"':s}
 function toCsv(objects:any[]){
- const head=["No","Name","Categories","Brand","Operator","Settlement","Settlement method","Settlement distance m","Address","Address quality","Normalized location","Latitude","Longitude","Sources","Source count","Resolution status","Confidence","Wikidata QID"];
- const rows=objects.map((x,i)=>[i+1,x.canonical_name,(x.category_keys??[]).join(" | "),x.brand,x.operator,x.settlement,x.settlement_method,x.settlement_distance_m,x.address,x.address_quality,x.normalized_location,Number(x.latitude).toFixed(6),Number(x.longitude).toFixed(6),x.sources.map((s:any)=>s.source+":"+s.source_id).join(" | "),x.source_count,x.resolution_status,x.resolution_confidence,x.wikidata_qid]);
+ const head=["No","Name","Categories","Brand","Operator","Settlement","Settlement method","Settlement distance m","Address","Address quality","Normalized location","Latitude","Longitude","Distance m","Route distance m","Route along m","Route segment","Sources","Source count","Resolution status","Confidence","Wikidata QID"];
+ const rows=objects.map((x,i)=>[i+1,x.canonical_name,(x.category_keys??[]).join(" | "),x.brand,x.operator,x.settlement,x.settlement_method,x.settlement_distance_m,x.address,x.address_quality,x.normalized_location,Number(x.latitude).toFixed(6),Number(x.longitude).toFixed(6),x.distance_m,x.route_distance_m,x.route_along_m,x.route_segment,x.sources.map((s:any)=>s.source+":"+s.source_id).join(" | "),x.source_count,x.resolution_status,x.resolution_confidence,x.wikidata_qid]);
  return[head,...rows].map(r=>r.map(csvCell).join(",")).join("\r\n");
 }
 async function oblastRows(sb:any){const {data,error}=await sb.from("oblasts").select("id,code,name_uk,name_en");if(error)throw error;return data??[]}
 async function resolveOblast(sb:any,q:any){const rows=await oblastRows(sb),best=resolveOblastRow(rows,q);if(!best)return null;const {data:g,error:ge}=await sb.rpc("firewatch_oblast_geometry",{p_oblast_id:best.id});if(ge)throw ge;return{...best,...g}}
+
+let oblastMaskPromise:Promise<any[]>|null=null;
+function bboxOverlap(a:number[],b:number[]){return a.length===4&&b.length===4&&a[0]<=b[2]&&a[2]>=b[0]&&a[1]<=b[3]&&a[3]>=b[1]}
+async function oblastMasks(sb:any){
+ if(!oblastMaskPromise)oblastMaskPromise=(async()=>{
+  const rows=await oblastRows(sb);
+  const xs=await Promise.all(rows.map(async(r:any)=>{const {data,error}=await sb.rpc("firewatch_oblast_geometry",{p_oblast_id:r.id});if(error)throw error;return data}));
+  return xs.filter((x:any)=>x?.geometry&&Array.isArray(x?.bbox));
+ })().catch(e=>{oblastMaskPromise=null;throw e});
+ return await oblastMaskPromise;
+}
+function masksForBbox(masks:any[],b:number[]){return masks.filter(x=>bboxOverlap((x.bbox??[]).map(Number),b))}
+function insideMasks(lat:number,lon:number,masks:any[]){return masks.some(x=>insideGeom(lat,lon,x.geometry))}
+function sqlLiteral(v:unknown){return "'"+String(v??"").slice(0,120).replace(/\u0000/g,"").replace(/'/g,"''")+"'"}
+function postpassPlaceSql(name:string){
+ const q=sqlLiteral(name),b=[21.5,43.5,41.5,53.7];
+ return `
+SELECT osm_id,osm_type,tags,ST_PointOnSurface(geom) geom
+FROM postpass_pointlinepolygon
+WHERE geom && ST_MakeEnvelope(${b[0]},${b[1]},${b[2]},${b[3]},4326)
+  AND tags->>'place' IN ('city','town','village','hamlet')
+  AND (
+   lower(coalesce(tags->>'name:uk',''))=lower(${q})
+   OR lower(coalesce(tags->>'name:ru',''))=lower(${q})
+   OR lower(coalesce(tags->>'name',''))=lower(${q})
+   OR lower(coalesce(tags->>'name:en',''))=lower(${q})
+  )
+LIMIT 50`;
+}
+function spatialSettlementCandidates(d:any,masks:any[]){
+ const out:SettlementCandidate[]=[];
+ for(const f of Array.isArray(d?.features)?d.features:[]){
+  const p=f?.properties??{},t=p.tags??{},ctr=geoCenter(f),name=t?.["name:uk"]??t?.["name:ru"]??t?.name??t?.["name:en"];
+  if(!ctr||!name||!insideMasks(ctr[0],ctr[1],masks))continue;
+  out.push({name:String(name).slice(0,220),latitude:ctr[0],longitude:ctr[1],place:t?.place?String(t.place):null,population:Number.isFinite(Number(t?.population))?Number(t.population):null,source_id:String(p.osm_type??"")+":"+String(p.osm_id??"")});
+ }
+ return out;
+}
+async function spatialSearch(sb:any,body:any){
+ const spatialInput=body?.spatial&&typeof body.spatial==="object"?{...body.spatial}:{...body};
+ const requestedMode=String(spatialInput.mode??spatialInput.type??"").toLowerCase();
+ const rawObject=String(body.query??"").trim(),extracted=extractRegionalFilters(rawObject),filters=mergeFilters(extracted.filters,normalizeFilters(body.filters));
+ let categoryInputs:string[]=[];
+ if(Array.isArray(body.categories))categoryInputs=body.categories.map((x:any)=>String(x??"").trim()).filter(Boolean);
+ else categoryInputs=splitObjectExpression(extracted.text||body.category||"");
+ if(!categoryInputs.length)throw new Error("missing object/category");
+ const categoryPlan=resolveCategoryList(categoryInputs);
+ if(categoryPlan.ambiguous){const labels=(categoryPlan.ambiguous.suggestions??[]).map(x=>x.label);throw new Error("ambiguous category"+(labels.length?": "+labels.join(" / "):""))}
+ if(!categoryPlan.resolutions.length)throw new Error("object/category could not be resolved");
+ const specs=categoryPlan.resolutions.map(x=>x.spec!).filter(Boolean),sqlFilters={...filters,settlement:null,source:null,min_confidence:null,has_address:null},filterPredicate=buildFilterPredicate(sqlFilters);
+ const querySpecs:Spec[]=specs.map(x=>({...x,osm:"("+x.osm+") AND ("+filterPredicate+")"}));
+ const spec:Spec={key:specs.length===1?specs[0].key:"plan_"+multiKey(categoryPlan.resolutions,filters),label:specs.map(x=>x.label).join(" + "),aliases:[],osm:"("+specs.map(x=>"("+x.osm+")").join(" OR ")+") AND ("+filterPredicate+")",overture:[...new Set(specs.flatMap(x=>x.overture))],overtureTypes:[...new Set(specs.flatMap(x=>x.overtureTypes))]};
+ const resolution={mode:categoryPlan.resolutions.length>1?"multi":categoryPlan.resolutions[0].mode,input:rawObject||categoryInputs.join(" + "),confidence:Number(Math.min(...categoryPlan.resolutions.map(x=>x.confidence)).toFixed(3)),categories:categoryPlan.resolutions.map(x=>({key:x.spec?.key,label:x.spec?.label,mode:x.mode,input:x.input,confidence:Number(x.confidence.toFixed(3)),qualifier:x.qualifier??null})),filters};
+ const masks=await oblastMasks(sb);
+ let plan:SpatialPlan,settlementTarget:any=null;
+ if(["settlement","city","town"].includes(requestedMode)){
+  const name=String(spatialInput.name??spatialInput.settlement??spatialInput.city??"").trim();if(!name)throw new Error("settlement name required");
+  const places=spatialSettlementCandidates(await postpass(postpassPlaceSql(name)),masks),target=resolveSettlementTarget(places,name);if(!target)throw new Error("settlement not found in Ukraine");
+  const radius=Number(spatialInput.radius_m??(Number(spatialInput.radius_km)*1000)||target.radius_m);
+  plan=buildSpatialPlan({mode:"radius",lat:target.latitude,lon:target.longitude,radius_m:radius});
+  settlementTarget={name:target.name,place:target.place??null,latitude:target.latitude,longitude:target.longitude,source_id:target.source_id??null,name_score:target.name_score,default_radius_m:target.radius_m,applied_radius_m:radius};
+ }else plan=buildSpatialPlan(spatialInput);
+ const relevant=masksForBbox(masks,plan.bbox);if(!relevant.length)throw new Error("spatial area is outside Ukraine");
+ if(plan.input_vertices.some(([lon,lat])=>!insideMasks(lat,lon,relevant)))throw new Error("spatial input contains point outside Ukraine");
+ const ssum={...spatialSummary(plan),settlement_target:settlementTarget,ukraine_gate:"exact_oblast_geometry"};
+ if(body.explain===true)return json({ok:true,explain:true,category_label:spec.label,resolution,spatial:ssum,source_plan:{primary:"OpenStreetMap/Postpass",wikidata:"QID enrichment",overture:"not_applicable in Stage 43.2 spatial mode",ukraine_gate:"public.oblasts exact geometry",cache:"disabled for dynamic spatial queries"},limits:{raw_candidates_per_window:RAW_LIMIT,output_objects:OUTPUT_LIMIT,query_windows:plan.query_bboxes.length},policy:"Explain mode does not query object inventory sources; settlement-name mode may resolve the public OSM place."});
+
+ const errors:string[]=[],osmRows:any[]=[],osmMap=new Map<string,any>(),jobs=querySpecs.flatMap(qs=>plan.query_bboxes.map(b=>({qs,b}))),settled=await Promise.allSettled(jobs.map(j=>postpass(postpassSql(j.b,j.qs))));
+ let osmOk=0,osmTruncated=false;
+ for(let i=0;i<settled.length;i++){
+  const q=settled[i],qs=jobs[i].qs;if(q.status==="rejected"){errors.push("OSM/Postpass "+qs.label+": "+errText(q.reason));continue}
+  osmOk++;const raw=Array.isArray(q.value?.features)?q.value.features:[];if(raw.length>=RAW_LIMIT){osmTruncated=true;errors.push("OSM "+qs.label+": candidate limit reached")}
+  for(const f of raw){
+   const p=f?.properties??{},t=p.tags??{},ctr=geoCenter(f);if(!ctr||!insideMasks(ctr[0],ctr[1],relevant))continue;
+   const sourceId=String(p.osm_type??"")+":"+String(p.osm_id??""),existing=osmMap.get(sourceId);if(existing){existing.category_keys=[...new Set([...(existing.category_keys??[]),qs.key])];continue}
+   const ad=addrFromTags(t),qid=/^Q\d+$/.test(String(t?.wikidata??""))?String(t.wikidata):null,row={source:"OpenStreetMap",source_id:sourceId,name:osmName(t,qs),latitude:ctr[0],longitude:ctr[1],wikidata_qid:qid,brand:t?.brand?String(t.brand):null,operator:t?.operator?String(t.operator):null,settlement:ad.settlement,address:ad.address,category_keys:[qs.key],tags:safeOsm(t)};
+   osmMap.set(sourceId,row);osmRows.push(row);if(osmRows.length>=12000){osmTruncated=true;break}
+  }
+  if(osmRows.length>=12000)break;
+ }
+ const osmStatus=osmOk===jobs.length?"active":osmOk>0?"partial":"error",needSettlements=body.count_only!==true||Boolean(filters.settlement);
+ let settlements:SettlementCandidate[]=[],settlementStatus="skipped";
+ if(needSettlements){
+  try{const sbbox=expandBboxM(plan.bbox,25000),sd=await postpass(postpassSettlementSql(sbbox));settlements=spatialSettlementCandidates(sd,masksForBbox(masks,sbbox));settlementStatus=(Array.isArray(sd?.features)&&sd.features.length>=SETTLEMENT_LIMIT)?"partial":"active";if(settlementStatus==="partial")errors.push("OSM settlements: candidate limit reached")}
+  catch(e){settlementStatus="error";errors.push("Settlement enrichment: "+errText(e))}
+ }
+ const sourceFilter=norm(filters.source??""),needWikidata=body.count_only!==true||["wikidata","wd"].includes(sourceFilter);let wd:any[]=[];
+ if(needWikidata){try{wd=await wikidataByQids(osmRows)}catch(e){errors.push("Wikidata: "+errText(e))}}
+ const resolved=resolve([...osmRows,...wd],spec),enriched=enrichSettlements(resolved,settlements),postFiltered=applyObjectFilters(enriched.objects,filters),spatialFiltered=applySpatialPlan(postFiltered,plan),objects=spatialFiltered.slice(0,OUTPUT_LIMIT),truncated=osmTruncated||spatialFiltered.length>OUTPUT_LIMIT;
+ const byCategory:any={};for(const x of objects)for(const k of Array.isArray(x.category_keys)?x.category_keys:[])byCategory[k]=(byCategory[k]??0)+1;
+ const status=osmStatus!=="active"||settlementStatus==="error"||truncated?"degraded":"active",summary={resolved_objects:objects.length,base_resolved_objects:resolved.length,filtered_out:Math.max(0,resolved.length-objects.length),multi_source:objects.filter((x:any)=>x.source_count>1).length,osm_objects:osmRows.length,wikidata_objects:wd.length,truncated,cache_ttl_hours:0,resolution,filters,category_count:specs.length,by_category:byCategory,addressing:enriched.summary,spatial:ssum};
+ const source_status={osm_postpass:osmStatus,osm_queries_total:jobs.length,osm_queries_ok:osmOk,settlement_enrichment:settlementStatus,settlement_candidates:settlements.length,wikidata:needWikidata?(wd.length?"active":"not_applicable"):"skipped_count_only",overture:"not_applicable",overture_reason:"stage43_2_spatial_osm_primary"};
+ const payload={ok:true,cached:false,status,category_key:spec.key,category_label:spec.label,resolution,spatial:ssum,oblasts:relevant.map((x:any)=>({id:x.id,code:x.code,name_uk:x.name_uk??x.name,name_en:x.name_en})),source_status,summary,objects,errors,policy:"Spatial candidates are filtered by the requested geometry and exact Ukraine oblast polygons. Route corridors and radius searches are geometric approximations around the supplied line or point. Public-source completeness depends on OSM tagging and source availability."};
+ const format=String(body.format??"").toLowerCase();
+ if(format==="csv")return new Response("\uFEFF"+toCsv(objects),{headers:{"content-type":"text/csv; charset=utf-8","content-disposition":'attachment; filename="spatial-'+plan.mode+"-"+spec.key+'.csv"'}});
+ if(format==="geojson"){const g=toGeoJson(objects,{category_label:spec.label,spatial:ssum,summary});return new Response(JSON.stringify(g),{headers:{"content-type":"application/geo+json; charset=utf-8","cache-control":"no-store","content-disposition":'attachment; filename="spatial-'+plan.mode+"-"+spec.key+'.geojson"'}})}
+ if(body.count_only===true)return json({...payload,count_only:true,objects:[]});
+ return json(payload);
+}
 
 Deno.serve(async(req:Request)=>{
  try{
@@ -120,6 +220,7 @@ Deno.serve(async(req:Request)=>{
     const {ok:_aliasOk,...aliasReport}=report;return json({self_test:"oblast_aliases",ok,...aliasReport,category_validation:categories},ok?200:500);
   }
   if(body.self_test==="regional_categories"){const report=validateRegionalCategories();return json({self_test:"regional_categories",...report},report.ok?200:500)}
+  if(body.spatial||["radius","nearest","polygon","route","settlement","city","town"].includes(String(body.mode??"").toLowerCase()))return await spatialSearch(sb,body);
 
   const rawQuery=String(body.query??"").trim();
   const extracted=extractRegionalFilters(rawQuery);
