@@ -289,6 +289,10 @@ async function dossier(sb:any,q:string){
   const {data,error}=await sb.rpc("firewatch_dossier",{p_query:q})
     .abortSignal(AbortSignal.timeout(7000));
   if(error)throw error;
+  if(data?.event?.id){
+    const {data:t}=await sb.from("event_temporal_correlations").select("*").eq("fire_event_id",String(data.event.id)).maybeSingle();
+    (data as any).temporal_correlation=t??null;
+  }
   return data;
 }
 const CLIENT_DOSSIER_FLAG_LABELS:Record<string,string>={
