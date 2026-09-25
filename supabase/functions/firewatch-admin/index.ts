@@ -425,9 +425,12 @@ async function searchText(sb:any,arg:string){
 }
 async function analyticsText(sb:any,hours=24){
   const h=Math.max(1,Math.min(8760,Number(hours)||24));
-  const {data,error}=await sb.rpc("firewatch_analytics_summary",{p_hours:h});if(error)throw error;
+  const [{data,error},{data:neptun,error:ne}]=await Promise.all([
+    sb.rpc("firewatch_analytics_summary",{p_hours:h}),
+    sb.rpc("firewatch_neptun_stats",{p_hours:h})
+  ]);if(error)throw error;if(ne)throw ne;
   const e:any=data?.events??{},frp:any=data?.frp??{},oblasts:any[]=Array.isArray(data?.by_oblast)?data.by_oblast:[],src:any[]=Array.isArray(data?.by_source)?data.by_source:[];
-  const q:any=data?.quality??{},ni=q.notification_integrity??{},sc=q.source_coverage??{},bl=q.source_baseline??{},gi=q.geo_integrity??{};
+  const q:any=data?.quality??{},ni=q.notification_integrity??{},sc=q.source_coverage??{},bl=q.source_baseline??{},gi=q.geo_integrity??{},n:any=neptun??{},nt:any=n.types??{};
   const lines=[
     `📈 Analytics / Stage 31 • ${h} ч`,
     `Новые события: ${Number(e.new??e.total??0)} • active ${Number(e.active??0)} • closed ${Number(e.closed??0)}`,
@@ -441,6 +444,13 @@ async function analyticsText(sb:any,hours=24){
   lines.push("","Источники по детекциям:");
   for(const x of src.slice(0,8))lines.push(`• ${x.source}: ${x.detections}`);
   lines.push("",
+    "✈️ Neptun:",
+    `Корреляций: ${Number(n.correlations??0)} • FIRMS-событий: ${Number(n.events??0)}`,
+    `Shahed: ${Number(nt.shahed??0)} • ракеты: ${Number(nt.raketa??0)} • развед.: ${Number(nt.rozved??0)}${Number(nt.other??0)?" • прочие: "+Number(nt.other):""}`,
+    `По времени: до FIRMS ${Number(n.before_firms??0)} • после ${Number(n.after_firms??0)} • одновременно ${Number(n.simultaneous??0)}`,
+    `Средний |Δt|: ${n.avg_abs_offset_minutes==null?"—":Number(n.avg_abs_offset_minutes).toFixed(1)+" мин"}`,
+    "Neptun — пространственно-временной контекст; совпадение не устанавливает причину события.",
+    "",
     `Integrity: gaps ${Number(ni.notification_gaps??0)} • backlog ${Number(ni.delivery_backlog??0)}`,
     `Coverage: active ${Number(sc.sources_active??0)}/${Number(sc.sources_total??0)} • degraded ${Number(sc.sources_degraded??0)}`,
     `Geo integrity: ${gi.status??"—"} • missing ${Number(gi.missing_in_db??0)}`,
