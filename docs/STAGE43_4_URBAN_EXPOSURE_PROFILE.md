@@ -68,3 +68,26 @@ Urban enrichment is non-critical to the base spatial search.
 - Urban source degradation does not convert a successful core object search into a hard failure.
 
 This is intentional production hardening after a dense-city acceptance probe showed that downloading generic building geometries could keep the function occupied for too long.
+
+## Production acceptance — 2026-09-25
+
+Status: **CLOSED / PRODUCTION READY**
+
+Production deployments:
+
+- `firewatch-regional-search v28`
+- `firewatch-client v56`
+- `firewatch-admin v102`
+- GeoWatch Dashboard: Stage 43.4 card deployed
+- recovery Dashboard copy synchronized in FIRMSGeoTools
+
+Validation:
+
+- Clean Install CI passed on the final Stage 43.4 source tree.
+- Unit taxonomy coverage includes dense urban, industrial, mixed, rural, forest, agricultural and unknown profiles.
+- Production schema 43 applied; `urban_exposure_ghsl_cache` has RLS enabled and public roles revoked.
+- Production GHSL path was exercised at Kyiv center (50.4501, 30.5234): the cache received epoch-2025 metrics, including population_1km ≈ 63669.7 and built_fraction_1km_pct ≈ 28.14.
+- The initial dense-city acceptance exposed excessive latency from generic building geometry transfer. The production design was changed to server-side aggregate building counts, a normalized 2 km context radius, parallel GHSL/OSM probes, and a 6 s hard timeout for each Urban Postpass probe.
+- Supabase advisors were reviewed. The new cache intentionally has RLS with no public policy because it is service-role-only; the fresh updated_at index can appear as unused immediately after deployment.
+
+Acceptance criterion: failure or timeout of optional urban-context sources must degrade `summary.urban_exposure.source_status`, not fail the core spatial object search.
