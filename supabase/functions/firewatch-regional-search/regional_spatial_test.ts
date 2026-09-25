@@ -1,4 +1,4 @@
-import {applySpatialPlan,buildSpatialPlan,haversineM,pointInGeometry,routeDistanceM,routeLengthM} from "./regional_spatial.ts";
+import {applySpatialPlan,applySpatialPlanAll,buildSpatialPlan,haversineM,pointInGeometry,routeDistanceM,routeLengthM} from "./regional_spatial.ts";
 function assert(x:unknown,msg:string){if(!x)throw new Error(msg)}
 
 Deno.test("radius plan filters and sorts",()=>{
@@ -40,3 +40,5 @@ Deno.test("limits reject oversized requests",()=>{
 Deno.test("haversine sanity",()=>{
  const d=haversineM(50.4501,30.5234,50.4501,30.5234);assert(d===0,"same point");
 });
+
+Deno.test("nearest analytics population can keep all candidates",()=>{const p=buildSpatialPlan({mode:"nearest",lat:49.5883,lon:34.5514,nearest_n:2,search_radius_m:30000});const src=[{id:1,latitude:49.59,longitude:34.55},{id:2,latitude:49.60,longitude:34.56},{id:3,latitude:49.70,longitude:34.70}];assert(applySpatialPlan(src,p).length===2,"nearest output N");assert(applySpatialPlanAll(src,p).length===3,"analytics population all")});
