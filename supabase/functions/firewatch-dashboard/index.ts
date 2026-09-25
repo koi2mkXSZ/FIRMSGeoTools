@@ -52,6 +52,7 @@ Deno.serve(async(req:Request)=>{
     explain:Boolean(body.explain),
     filters:body.filters&&typeof body.filters==="object"?body.filters:{}
    };
+   if(body.spatial&&typeof body.spatial==="object")payload.spatial=body.spatial;
    if(String(body.query??"").trim())payload.query=String(body.query).trim();
    else{
     payload.oblast=String(body.oblast??"").trim();
