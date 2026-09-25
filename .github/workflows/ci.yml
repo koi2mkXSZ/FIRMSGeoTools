@@ -63,3 +63,5 @@ jobs:
           deno test --config supabase/functions/firewatch-regional-search/deno.json supabase/functions/firewatch-regional-search/urban_exposure_test.ts
           deno check --config supabase/functions/firewatch-temporal-correlation/deno.json supabase/functions/firewatch-temporal-correlation/index.ts
           deno test --config supabase/functions/firewatch-temporal-correlation/deno.json supabase/functions/firewatch-temporal-correlation/temporal_engine_test.ts
+          deno check --config supabase/functions/firewatch-neptun-backfill/deno.json supabase/functions/firewatch-neptun-backfill/index.ts
+          deno test --config supabase/functions/firewatch-neptun-backfill/deno.json supabase/functions/firewatch-neptun-backfill/telegram_parser_test.ts
