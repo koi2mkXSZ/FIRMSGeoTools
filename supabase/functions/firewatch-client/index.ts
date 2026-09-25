@@ -630,9 +630,21 @@ function spatialModeText(sp:any){
   return mode;
 }
 function spatialSearchText(d:any){
-  const s=d?.summary??{},sp=d?.spatial??s?.spatial??{},xs:any[]=Array.isArray(d?.objects)?d.objects:[],r=d?.resolution??s?.resolution??{},f=r?.filters??{},oblasts=(Array.isArray(d?.oblasts)?d.oblasts:[]).map((x:any)=>x.name_uk??x.code).filter(Boolean).join(", ");
+  const s=d?.summary??{},sp=d?.spatial??s?.spatial??{},an=s?.analytics??{},xs:any[]=Array.isArray(d?.objects)?d.objects:[],r=d?.resolution??s?.resolution??{},f=r?.filters??{},oblasts=(Array.isArray(d?.oblasts)?d.oblasts:[]).map((x:any)=>x.name_uk??x.code).filter(Boolean).join(", ");
   const fs=Object.entries(f).filter(([,v])=>v).map(([k,v])=>k+"="+String(v)).join(" • ");
-  const lines=["🧭 SPATIAL OBJECT SEARCH",String(d?.category_label??d?.category_key??"—"),"Найдено: "+Number(s.resolved_objects??xs.length)+" • status "+String(d?.status??"—"),"Геометрия: "+spatialModeText(sp),"Области: "+(oblasts||"—")+(fs?"\nФильтры: "+fs:""),"OSM candidates: "+Number(s.osm_objects??0)+" • cache disabled",""];
+  const lines=["🧭 SPATIAL OBJECT SEARCH",String(d?.category_label??d?.category_key??"—"),"Найдено: "+Number(s.resolved_objects??xs.length)+" • status "+String(d?.status??"—"),"Геометрия: "+spatialModeText(sp),"Области: "+(oblasts||"—")+(fs?"\nФильтры: "+fs:""),"OSM candidates: "+Number(s.osm_objects??0)+" • cache disabled"];
+  if(an&&Number.isFinite(Number(an.study_area_km2)))lines.push("Плотность: "+Number(an.density_per_km2??0).toFixed(3)+" объект/км² • площадь "+Number(an.study_area_km2??0).toFixed(2)+" км²");
+  if(Array.isArray(an.rings)&&an.rings.length)lines.push("Кольца: "+an.rings.map((x:any)=>String(x.label)+" "+Number(x.count??0)).join(" • "));
+  if(Array.isArray(an.sectors)&&an.sectors.length){
+    const ranked=[...an.sectors].sort((a:any,b:any)=>Number(b.count??0)-Number(a.count??0));
+    lines.push("Сектора: "+ranked.map((x:any)=>String(x.sector)+" "+Number(x.count??0)).join(" • "));
+  }
+  if(an.coverage_gaps)lines.push("Coverage gaps: "+Number(an.coverage_gaps.empty_cells??0)+"/"+Number(an.coverage_gaps.cell_count??0)+" пустых ring×sector ячеек • "+(Number(an.coverage_gaps.empty_fraction??0)*100).toFixed(1)+"%");
+  if(an.route?.segments?.length){
+    lines.push("Route 5 км: "+an.route.segments.map((x:any)=>"#"+Number(x.index)+" "+Number(x.count??0)).join(" • "));
+    lines.push("Route gaps: "+Number(an.route.gap_count??0)+" сегм. • max "+(Number(an.route.max_gap_m??0)/1000).toFixed(1)+" км");
+  }
+  lines.push("");
   xs.slice(0,20).forEach((x:any,i:number)=>{
     const metric=x.distance_m!=null?" • "+Math.round(Number(x.distance_m))+" м от центра":x.route_distance_m!=null?" • "+Math.round(Number(x.route_distance_m))+" м от маршрута • along "+(Number(x.route_along_m??0)/1000).toFixed(1)+" км":"";
     lines.push((i+1)+". "+String(x.canonical_name??"—")+(x.brand&&x.brand!==x.canonical_name?" • "+String(x.brand):"")+(x.settlement?" • "+String(x.settlement):"")+(x.address?" • "+String(x.address):"")+"\n   "+Number(x.latitude).toFixed(5)+", "+Number(x.longitude).toFixed(5)+metric+" • "+Number(x.source_count??0)+" src");
@@ -641,7 +653,7 @@ function spatialSearchText(d:any){
   if(!xs.length)lines.push("","Совпадений в подключённых публичных данных не найдено.");
   if(Boolean(s.truncated))lines.push("","⚠️ Достигнут лимит источника/выдачи.");
   if(Array.isArray(d?.errors)&&d.errors.length)lines.push("","⚠️ Partial: "+d.errors.slice(0,3).join(" | "));
-  lines.push("","Граница Украины проверяется точным PostGIS ST_Covers. Radius/route corridor — геометрическая зона, не административная граница.");
+  lines.push("","Density/gaps описывают полноту найденных публичных объектов в геометрии запроса, а не физическую полноту территории.");
   return lines.join("\n").slice(0,3900);
 }
 function parseSpatialCommand(raw:string,kind:"near"|"nearest"|"city"|"polygon"|"route"){
