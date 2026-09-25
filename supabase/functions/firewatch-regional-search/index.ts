@@ -225,7 +225,14 @@ Deno.serve(async(req:Request)=>{
     const {ok:_aliasOk,...aliasReport}=report;return json({self_test:"oblast_aliases",ok,...aliasReport,category_validation:categories},ok?200:500);
   }
   if(body.self_test==="regional_categories"){const report=validateRegionalCategories();return json({self_test:"regional_categories",...report},report.ok?200:500)}
-  if(body.spatial||["radius","nearest","polygon","route","settlement","city","town"].includes(String(body.mode??"").toLowerCase()))return await spatialSearch(sb,body);
+  if(body.spatial||["radius","nearest","polygon","route","settlement","city","town"].includes(String(body.mode??"").toLowerCase())){
+    try{return await spatialSearch(sb,body)}
+    catch(e){
+      const m=errText(e);
+      if(/required|must be|outside Ukraine|not found in Ukraine|exceeds|supports at most|too many query windows|could not be resolved|ambiguous category|valid lat\/lon/i.test(m))return json({ok:false,error:m},400);
+      throw e;
+    }
+  }
 
   const rawQuery=String(body.query??"").trim();
   const extracted=extractRegionalFilters(rawQuery);
