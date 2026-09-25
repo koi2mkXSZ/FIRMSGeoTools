@@ -34,7 +34,7 @@ export function buildTemporalProfile(referenceTime:string,input:TemporalItem[]){
     const offset=Math.round((t-ref)/1000);
     timeline.push({...raw,source_time:new Date(t).toISOString(),offset_seconds:offset,relation:offset<0?"before":offset>0?"after":"simultaneous"});
   }
-  timeline.sort((a,b)=>Date.parse(a.source_time)-Date.parse(b.source_time)||a.source.localeCompare(b.source));
+  timeline.sort((a,b)=>Date.parse(a.source_time)-Date.parse(b.source_time)||a.source.localeCompare(b.source)||a.time_semantics.localeCompare(b.time_semantics)||a.label.localeCompare(b.label));
 
   const summary:Record<string,{count:number;best_abs_offset_seconds:number;best_offset_seconds:number;proximity_score:number;weight:number}>={};
   for(const family of ["neptun","osint","atmosphere","satellite"]){
