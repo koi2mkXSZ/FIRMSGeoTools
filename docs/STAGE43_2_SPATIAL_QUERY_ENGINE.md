@@ -142,7 +142,8 @@ and returns the matching oblast metadata.
 
 Properties:
 
-- maximum 15,000 points per batch;
+- maximum 15,000 points per database RPC batch;
+- Edge orchestration chunks larger candidate sets into 10,000-point batches, so settlement enrichment up to its 20,000-candidate source limit cannot overflow the RPC cap;
 - SECURITY INVOKER;
 - `anon`: no EXECUTE;
 - `authenticated`: no EXECUTE;
@@ -311,6 +312,61 @@ No new Edge Function was introduced; Stage 43.2 extends `firewatch-regional-sear
 
 Production Dashboard and recovery copy are synchronized.
 
+## Final production acceptance — CLOSED
+
+Final production versions:
+
+- `firewatch-regional-search`: ACTIVE **v22**;
+- `firewatch-client`: ACTIVE **v52**;
+- `firewatch-admin`: ACTIVE **v98**;
+- `firewatch-dashboard`: ACTIVE **v15**;
+- schema version: **40**.
+
+Exact-main hardening:
+
+- Edge spatial gate now chunks candidate sets in 10,000-point batches before calling the 15,000-point RPC;
+- client/admin help is labeled Stage 43.2 and exposes all spatial commands;
+- Clean Install CI for exact code head `46b762086054e5d3391167230baf001e3d1b16b0`: **SUCCESS #36094543246**;
+- Supabase Security Advisor: no finding related to Stage 43.2 spatial gate.
+
+Post-deploy v22 data-plane smoke:
+
+- Radius 5 km, Poltava: HTTP 200, active, **39** objects, 44 OSM candidates, no truncation.
+- Nearest 5 within 20 km: HTTP 200, active, **5** objects, sorted distances 837 / 1156 / 1578 / 2095 / 2457 m.
+- City Poltava, 10 km: HTTP 200, active, **55** objects, target OSM city resolved exactly.
+- Reference polygon: HTTP 200, active, **50** objects.
+- Reference route, corridor ±2 km: HTTP 200, active, **27** objects, route length ~26.405 km.
+- All successful spatial responses report `ukraine_gate=batch_postgis_st_covers`.
+- Invalid radius 100 km: **HTTP 400**, `radius_m must be 100..50000`.
+- Point outside Ukraine: **HTTP 400**, `spatial input contains point outside Ukraine`.
+- Direct unauthenticated request: **HTTP 401**.
+
+Post-deploy export smoke:
+
+- nearest CSV: HTTP 200, `text/csv; charset=utf-8`, **5 data rows**, includes `Distance m`;
+- route GeoJSON: HTTP 200, `application/geo+json; charset=utf-8`, **27 features**, includes `route_distance_m`.
+
+Signed Dashboard acceptance:
+
+- HMAC-signed `action=regional` nearest-N request: HTTP 200;
+- returns the same **5** objects and the same sorted distances as the direct backend;
+- public Dashboard commit `6d1cb51d115b3bdf9b3893f5dd7cc7b6d1db5103`;
+- Pages deployment **#36093623986 SUCCESS**;
+- inline Dashboard JavaScript syntax check: PASS;
+- public and recovery Dashboard copies are byte-identical.
+
+Telegram acceptance:
+
+- client bootstrap: HTTP 200, webhook enabled, pending updates 0, last error null;
+- admin health: HTTP 200, webhook enabled, pending updates 0, last error null;
+- admin command registry: `commands_v20=true`;
+- both bot code paths expose `/objects_near`, `/objects_nearest`, `/objects_city`, `/objects_polygon`, and `/objects_route`.
+
+Performance observation on v22:
+
+- warm radius/nearest/polygon/route requests are approximately 1–2 seconds;
+- city-name mode may take longer because it performs a public OSM place lookup first; one acceptance request took ~17.4 seconds, still within the 90-second caller budget.
+
 ## Status
 
-Production acceptance is pending only the final invalid-input HTTP status deploy/smoke and exact-main CI.
+**CLOSED / production-ready — 2026-09-25.**
