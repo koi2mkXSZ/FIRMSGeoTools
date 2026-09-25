@@ -19,6 +19,7 @@ const URBAN_CONTEXT_LIMIT=1800;
 const URBAN_CONTEXT_RADIUS_M=2000;
 const URBAN_PROFILE="urban-exposure-v1";
 const URBAN_GHSL_CACHE_MS=30*24*3600_000;
+const URBAN_POSTPASS_TIMEOUT_MS=6000;
 
 function json(x:unknown,s=200){return new Response(JSON.stringify(x,null,2),{status:s,headers:{"content-type":"application/json; charset=utf-8","cache-control":"no-store"}})}
 function errText(e:any){return e instanceof Error?e.message:(e&&typeof e==="object"?JSON.stringify({code:e.code,message:e.message,details:e.details,hint:e.hint}):String(e))}
@@ -142,6 +143,7 @@ function settlementCandidates(d:any,geom:any){
  return out;
 }
 async function postpass(sql:string){const r=await fetch(POSTPASS,{method:"POST",headers:{"accept":"application/json","content-type":"application/x-www-form-urlencoded","user-agent":"GeoWatch-RegionalSearch/1.0"},body:new URLSearchParams([["data",sql]]),signal:AbortSignal.timeout(45000)});const t=await r.text();if(!r.ok)throw new Error("Postpass HTTP "+r.status+": "+t.slice(0,220));try{return JSON.parse(t)}catch{throw new Error("Postpass invalid JSON")}}
+async function postpassUrban(sql:string){const r=await fetch(POSTPASS,{method:"POST",headers:{"accept":"application/json","content-type":"application/x-www-form-urlencoded","user-agent":"GeoWatch-UrbanExposure/1.0"},body:new URLSearchParams([["data",sql]]),signal:AbortSignal.timeout(URBAN_POSTPASS_TIMEOUT_MS)});const t=await r.text();if(!r.ok)throw new Error("Postpass HTTP "+r.status+": "+t.slice(0,220));try{return JSON.parse(t)}catch{throw new Error("Postpass invalid JSON")}}
 async function fetchGeo(url:string){const r=await fetch(url,{headers:{"accept":"application/geo+json,application/json","user-agent":"GeoWatch-RegionalSearch/1.0"},signal:AbortSignal.timeout(15000)});const t=await r.text();if(!r.ok)throw new Error("HTTP "+r.status+": "+t.slice(0,160));return JSON.parse(t)}
 function overtureText(p:any){return norm([p?.class,p?.basic_category,p?.subtype,JSON.stringify(p?.categories??{}),JSON.stringify(p?.taxonomy??{})].filter(Boolean).join(" "))}
 function overtureMatches(p:any,s:Spec){const q=overtureText(p);return s.overture.some(x=>q.includes(norm(x)))}
@@ -304,13 +306,14 @@ async function spatialSearch(sb:any,body:any){
  if(body.urban_exposure!==false){
   const center=representativeCenter(plan);
   let urbanRowsLocal:any[]=[],buildings={building_count:0,nonresidential_buildings:0},urbanTruncated=false,urbanOk=0,urbanTotal=0;
+  const ghPromise=ghslUrbanProbe(sb,center);
   if(center){
-   const urbanJobs=await Promise.allSettled([postpass(postpassUrbanSql(center.lat,center.lon)),postpass(postpassUrbanBuildingSql(center.lat,center.lon))]);urbanTotal=urbanJobs.length;
+   const urbanJobs=await Promise.allSettled([postpassUrban(postpassUrbanSql(center.lat,center.lon)),postpassUrban(postpassUrbanBuildingSql(center.lat,center.lon))]);urbanTotal=urbanJobs.length;
    const ctxJob=urbanJobs[0],buildingJob=urbanJobs[1];
    if(ctxJob.status==="fulfilled"){urbanOk++;urbanRowsLocal=urbanRows(ctxJob.value);urbanTruncated=urbanRowsLocal.length>=URBAN_CONTEXT_LIMIT}else errors.push("Urban OSM context: "+errText(ctxJob.reason));
    if(buildingJob.status==="fulfilled"){urbanOk++;buildings=urbanBuildingCounts(buildingJob.value)}else errors.push("Urban OSM buildings: "+errText(buildingJob.reason));
   }
-  const gh=await ghslUrbanProbe(sb,center),ctx=urbanContextSummary(urbanRowsLocal,buildings,urbanTruncated);
+  const gh=await ghPromise,ctx=urbanContextSummary(urbanRowsLocal,buildings,urbanTruncated);
   urbanExposure=buildUrbanExposure(gh.metrics,ctx,{center:center?{latitude:center.lat,longitude:center.lon}:null,center_method:center?.method??null});
   urbanExposure.context_radius_m=URBAN_CONTEXT_RADIUS_M;urbanExposure.ghsl_cached=gh.cached;urbanExposure.ghsl_error=gh.error;urbanExposure.osm_queries_total=urbanTotal;urbanExposure.osm_queries_ok=urbanOk;
   urbanStatus=(gh.metrics||ctx.total>0||ctx.buildings>0)?((urbanOk===urbanTotal&&!urbanTruncated&&gh.metrics)?"active":"partial"):"unavailable";
