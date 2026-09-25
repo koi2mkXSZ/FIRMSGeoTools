@@ -57,7 +57,8 @@ q AS (
  FROM postpass_pointlinepolygon,p
  WHERE geom && ST_MakeEnvelope(${minLon},${minLat},${maxLon},${maxLat},4326)
    AND (
-     tags->>'landuse' IN ('residential','industrial','commercial','retail')
+     tags->>'landuse' IN ('residential','industrial','commercial','retail','forest','farmland','farmyard','orchard','vineyard','meadow')
+     OR tags->>'natural'='wood'
      OR tags->>'amenity' IS NOT NULL
      OR tags->>'shop' IS NOT NULL
      OR tags->>'office' IS NOT NULL
@@ -66,6 +67,9 @@ q AS (
      OR tags->>'public_transport' IS NOT NULL
      OR tags->>'railway' IN ('station','halt','tram_stop','yard','terminal')
      OR tags->>'aeroway' IN ('aerodrome','terminal','helipad')
+     OR tags->>'power' IS NOT NULL
+     OR tags->>'highway'='bus_stop'
+     OR tags->>'healthcare' IS NOT NULL
    )
 )
 SELECT osm_id,osm_type,tags,geom,distance_m FROM q
@@ -83,12 +87,15 @@ b AS (
    AND tags ? 'building'
 )
 SELECT count(*)::int building_count,
+       count(*) filter(where tags->>'building' in ('house','detached','residential','apartments','terrace','dormitory'))::int residential_buildings,
+       count(*) filter(where tags->>'building' in ('commercial','retail','supermarket','office'))::int commercial_buildings,
+       count(*) filter(where tags->>'building' in ('industrial','warehouse','factory'))::int industrial_buildings,
        count(*) filter(where tags->>'building' in ('industrial','warehouse','commercial','retail','hospital','school','university','government','civic','public'))::int nonresidential_buildings,
        ST_SetSRID(ST_MakePoint(${lon.toFixed(7)},${lat.toFixed(7)}),4326) geom
 FROM b WHERE distance_m<=${r}`}
 function urbanBuildingCounts(d:any){
  const f=Array.isArray(d?.features)?d.features[0]:null,p=f?.properties??{};
- return{building_count:Number(p.building_count??0),nonresidential_buildings:Number(p.nonresidential_buildings??0)};
+ return{building_count:Number(p.building_count??0),residential_buildings:Number(p.residential_buildings??0),commercial_buildings:Number(p.commercial_buildings??0),industrial_buildings:Number(p.industrial_buildings??0),nonresidential_buildings:Number(p.nonresidential_buildings??0)};
 }
 function urbanRows(d:any){
  const out:any[]=[];
@@ -105,14 +112,20 @@ function representativeCenter(plan:SpatialPlan){
  return{lat:pts.reduce((z:any,p:any)=>z+Number(p?.[1]??0),0)/pts.length,lon:pts.reduce((z:any,p:any)=>z+Number(p?.[0]??0),0)/pts.length,method:"mean_input_vertices"};
 }
 function urbanContextSummary(rows:any[],buildings:any,truncated:boolean){
- const xs=rows,c:any={total:xs.length,buildings:Number(buildings?.building_count??0),nonresidential_buildings:Number(buildings?.nonresidential_buildings??0),residential_landuse:0,industrial_landuse:0,commercial_landuse:0,retail_landuse:0,amenities:0,shops:0,offices:0,transport:0,industrial_objects:0,area_km2:Math.PI*URBAN_CONTEXT_RADIUS_M**2/1e6,radius_m:URBAN_CONTEXT_RADIUS_M,truncated};
- for(const x of xs){const t=x?.tags??{},land=String(t.landuse??"");
+ const xs=rows,c:any={total:xs.length,buildings:Number(buildings?.building_count??0),residential_buildings:Number(buildings?.residential_buildings??0),commercial_buildings:Number(buildings?.commercial_buildings??0),industrial_buildings:Number(buildings?.industrial_buildings??0),nonresidential_buildings:Number(buildings?.nonresidential_buildings??0),residential_landuse:0,industrial_landuse:0,commercial_landuse:0,retail_landuse:0,forest_landuse:0,agricultural_landuse:0,amenities:0,shops:0,offices:0,schools:0,hospitals:0,fuel_stations:0,energy:0,transport:0,industrial_objects:0,area_km2:Math.PI*URBAN_CONTEXT_RADIUS_M**2/1e6,radius_m:URBAN_CONTEXT_RADIUS_M,truncated};
+ for(const x of xs){const t=x?.tags??{},land=String(t.landuse??""),amen=String(t.amenity??""),natural=String(t.natural??"");
   if(land==="residential")c.residential_landuse++;
   if(land==="industrial")c.industrial_landuse++;
   if(land==="commercial")c.commercial_landuse++;
   if(land==="retail")c.retail_landuse++;
+  if(land==="forest"||natural==="wood")c.forest_landuse++;
+  if(["farmland","farmyard","orchard","vineyard","meadow"].includes(land))c.agricultural_landuse++;
   if(t.amenity)c.amenities++;if(t.shop)c.shops++;if(t.office)c.offices++;
-  if(t.public_transport||["station","halt","tram_stop"].includes(String(t.railway??""))||["aerodrome","terminal"].includes(String(t.aeroway??"")))c.transport++;
+  if(["school","university","college","kindergarten"].includes(amen))c.schools++;
+  if(["hospital","clinic","doctors"].includes(amen)||t.healthcare)c.hospitals++;
+  if(amen==="fuel")c.fuel_stations++;
+  if(t.power)c.energy++;
+  if(t.public_transport||amen==="bus_station"||String(t.highway??"")==="bus_stop"||["station","halt","tram_stop","yard","terminal"].includes(String(t.railway??""))||["aerodrome","terminal","helipad"].includes(String(t.aeroway??"")))c.transport++;
   if(t.industrial||land==="industrial"||["works","wastewater_plant"].includes(String(t.man_made??"")))c.industrial_objects++;
  }
  return c;
