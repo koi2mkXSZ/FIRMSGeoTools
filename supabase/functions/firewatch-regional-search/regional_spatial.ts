@@ -131,7 +131,7 @@ export function buildSpatialPlan(input:any):SpatialPlan{
  }
  throw new Error("spatial mode must be radius, nearest, polygon or route");
 }
-export function applySpatialPlan(objects:any[],plan:SpatialPlan){
+function applySpatialPlanInternal(objects:any[],plan:SpatialPlan,limitNearest:boolean){
  const out:any[]=[];
  for(const raw of objects??[]){
   const x={...raw},lat=Number(x.latitude),lon=Number(x.longitude);if(!Number.isFinite(lat)||!Number.isFinite(lon))continue;
@@ -143,8 +143,10 @@ export function applySpatialPlan(objects:any[],plan:SpatialPlan){
  }
  if(plan.mode==="nearest"||plan.mode==="radius")out.sort((a,b)=>Number(a.distance_m??Infinity)-Number(b.distance_m??Infinity));
  if(plan.mode==="route")out.sort((a,b)=>Number(a.route_along_m??Infinity)-Number(b.route_along_m??Infinity)||Number(a.route_distance_m??Infinity)-Number(b.route_distance_m??Infinity));
- return plan.mode==="nearest"?out.slice(0,plan.nearest_n):out;
+ return plan.mode==="nearest"&&limitNearest?out.slice(0,plan.nearest_n):out;
 }
+export function applySpatialPlan(objects:any[],plan:SpatialPlan){return applySpatialPlanInternal(objects,plan,true)}
+export function applySpatialPlanAll(objects:any[],plan:SpatialPlan){return applySpatialPlanInternal(objects,plan,false)}
 export function spatialSummary(plan:SpatialPlan){
  return{
   mode:plan.mode,bbox:plan.bbox,query_windows:plan.query_bboxes.length,
