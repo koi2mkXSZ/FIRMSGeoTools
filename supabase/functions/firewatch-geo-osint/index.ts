@@ -383,6 +383,31 @@ async function fetchContext(lat:number,lon:number){
     return{ok:true,endpoint:POSTPASS,method:"POST",osm_base_at:null,feature_count:sorted.length,context_type:nearest?(LABEL[nearest.category]??nearest.category):null,nearest_feature:nearest?.name??null,nearest_feature_distance_m:nearest?.distance_m??null,categories:cats,features,infra_profile_version:OIM_PROFILE_VERSION,infrastructure_counts:infraCounts,infrastructure_features:infrastructureFeatures,nearest_infrastructure:nearestInfra,infrastructure_summary:summary,infrastructure_rings:rings,infrastructure_context_flags:flags,openinframap_url:openInfraMapUrl(lat,lon)};
   }catch(e){return{ok:false,errors:[e instanceof Error?e.message:String(e)]}}
 }
+async function persistContext(sb:any,eventId:string,lat:number,lon:number,result:any){
+  const now=new Date().toISOString();
+  const {error:ue}=await sb.from("geo_osint_event_cache").upsert({
+    fire_event_id:eventId,queried_at:now,query_latitude:lat,query_longitude:lon,
+    query_location:`POINT(${lon} ${lat})`,query_radius_m:RADIUS_M,
+    osm_base_at:null,endpoint:result.endpoint,endpoint_method:result.method,
+    feature_count:result.feature_count,context_type:result.context_type,
+    nearest_feature:result.nearest_feature,nearest_feature_distance_m:result.nearest_feature_distance_m,
+    categories:result.categories,features:result.features,
+    infra_profile_version:result.infra_profile_version,infrastructure_counts:result.infrastructure_counts,
+    infrastructure_features:result.infrastructure_features,nearest_infrastructure:result.nearest_infrastructure,
+    infrastructure_summary:result.infrastructure_summary??{},infrastructure_rings:result.infrastructure_rings??{},
+    infrastructure_context_flags:result.infrastructure_context_flags??[],
+    openinframap_url:result.openinframap_url,last_error:null,updated_at:now
+  });
+  if(ue)throw ue;
+  const legacy=(result.features??[]).slice(0,5).map((x:any)=>({category:x.category,label:x.label,name:x.name,distance_m:x.distance_m,osm_type:x.osm_type,osm_id:x.osm_id}));
+  const {error:fe}=await sb.from("fire_events").update({
+    osm_context_type:result.context_type,osm_context_score:null,
+    osm_nearest_feature:result.nearest_feature,osm_nearest_feature_distance_m:result.nearest_feature_distance_m,
+    osm_features:legacy,osm_context_latitude:lat,osm_context_longitude:lon,osm_context_updated_at:now
+  }).eq("id",eventId);
+  if(fe)throw fe;
+  return{queried_at:now,feature_count:Number(result.feature_count??0),infrastructure_count:Array.isArray(result.infrastructure_features)?result.infrastructure_features.length:0};
+}
 function cacheFresh(cache:any,lat:number,lon:number){
   if(!cache)return false;
   if(String(cache.infra_profile_version??"")!==OIM_PROFILE_VERSION)return false;
@@ -399,8 +424,13 @@ Deno.serve(async(req:Request)=>{
   const url=Deno.env.get("SUPABASE_URL"),key=Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
   if(!url||!key)return json({ok:false,error:"missing env"},500);
   const sb=createClient(url,key,{auth:{persistSession:false}});
-  const {data:auth,error:ae}=await sb.rpc("verify_firewatch_cron_secret",{p_secret:req.headers.get("x-cron-secret")??""});
-  if(ae||auth!==true)return json({ok:false,error:"unauthorized"},401);
+  const bearer=req.headers.get("authorization")??"";
+  let authorized=bearer==="Bearer "+key;
+  if(!authorized){
+    const {data:auth,error:ae}=await sb.rpc("verify_firewatch_cron_secret",{p_secret:req.headers.get("x-cron-secret")??""});
+    authorized=!ae&&auth===true;
+  }
+  if(!authorized)return json({ok:false,error:"unauthorized"},401);
   let body:any={};try{body=await req.json()}catch{}
   if(body?.mode==="probe"||body?.mode==="probe-lite"){
     const {data:row,error:re}=await sb.from("geo_osint_event_cache").select("fire_event_id,query_latitude,query_longitude,feature_count").is("last_error",null).order("queried_at",{ascending:false}).limit(1).maybeSingle();
@@ -411,6 +441,21 @@ Deno.serve(async(req:Request)=>{
     const overpass=[] as any[];
     for(const endpoint of OVERPASS_PROBE_ENDPOINTS)overpass.push(body?.mode==="probe-lite"?await probeOverpassLite(endpoint,lat,lon):await probeOverpass(endpoint,lat,lon));
     return json({ok:true,mode:body?.mode,event_id:(row as any).fire_event_id,reference_cache_count:(row as any).feature_count,radius_m:RADIUS_M,postpass,overpass});
+  }
+  if(body?.mode==="event"){
+    const q=String(body?.event_id??body?.query??"").trim();
+    if(!q)return json({ok:false,error:"event_id required"},400);
+    const {data:e,error:ee}=await sb.rpc("firewatch_geo_context",{p_query:q});
+    if(ee)return json({ok:false,error:ee.message},502);
+    if(!e)return json({ok:false,error:"event not found"},404);
+    const eventId=String(e.id),lat=num(e.latitude),lon=num(e.longitude);
+    if(lat==null||lon==null)return json({ok:false,error:"event has no coordinates"},409);
+    const result:any=await fetchContext(lat,lon);
+    if(!result.ok)return json({ok:false,error:"geo refresh failed",details:result.errors??[]},502);
+    try{
+      const saved=await persistContext(sb,eventId,lat,lon,result);
+      return json({ok:true,mode:"event",event_id:eventId,latitude:lat,longitude:lon,radius_m:RADIUS_M,...saved,categories:result.categories??{},nearest_feature:result.nearest_feature??null,nearest_feature_distance_m:result.nearest_feature_distance_m??null});
+    }catch(err){return json({ok:false,error:err instanceof Error?err.message:String(err)},502)}
   }
 
   const {data:events,error}=await sb.from("fire_events")
