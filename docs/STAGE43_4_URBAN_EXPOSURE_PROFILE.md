@@ -8,8 +8,8 @@ The profile combines:
 
 - JRC GHSL GHS-POP epoch 2025;
 - JRC GHSL GHS-BUILT-S epoch 2025;
-- OpenStreetMap/Postpass building footprints;
-- OSM residential / industrial / commercial / retail landuse;
+- OpenStreetMap/Postpass building-footprint counts within 2 km;
+- OSM residential / industrial / commercial / retail landuse within 2 km;
 - OSM amenity, shop, office and transport activity indicators.
 
 ## Output
@@ -34,9 +34,11 @@ Every classification includes confidence, source completeness, component scores,
 
 For radius / nearest / settlement searches, GHSL is sampled at the query center.
 
-For route and polygon searches, GHSL is sampled at a representative center calculated from the input vertices. OSM context is still filtered against the complete requested geometry.
+For route and polygon searches, GHSL is sampled at a representative center calculated from the input vertices.
 
-The representative-center rule is explicit in `center_method` and must not be interpreted as whole-polygon population accounting.
+OSM urban context is intentionally normalized to a fixed **2 km radius around the representative center** for every spatial mode. Building footprints are counted by an aggregate Postpass query; POI / landuse context uses a bounded local query. This avoids downloading thousands of building geometries and makes profiles comparable across searches with different requested radii.
+
+The representative-center rule is explicit in `center_method` and `context_radius_m=2000`. It must not be interpreted as whole-polygon or whole-route population accounting.
 
 ## Cache
 
