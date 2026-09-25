@@ -1,3 +1,8 @@
+-- FIRMSGeoTools VERSION 1.0.0
+-- schema_version 43
+-- Stage 43.4 — Urban Exposure Profile
+-- 2026-09-25
+
 create table if not exists public.urban_exposure_ghsl_cache (
   cache_key text primary key,
   query_latitude double precision not null,
