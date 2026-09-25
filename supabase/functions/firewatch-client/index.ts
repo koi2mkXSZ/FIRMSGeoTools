@@ -518,6 +518,11 @@ async function bootstrapWebhook(sb:any,token:string,secret:string,url:string){
     {command:"objects_explain",description:"Показать интерпретацию запроса"},
     {command:"objects_csv",description:"CSV объектов области"},
     {command:"objects_geojson",description:"GeoJSON объектов области"},
+    {command:"objects_near",description:"Объекты в радиусе точки"},
+    {command:"objects_nearest",description:"Ближайшие N объектов"},
+    {command:"objects_city",description:"Объекты вокруг города / НП"},
+    {command:"objects_polygon",description:"Объекты внутри полигона"},
+    {command:"objects_route",description:"Объекты вдоль маршрута"},
     {command:"event",description:"Карточка события"},
     {command:"dossier",description:"OSINT-досье события"},
     {command:"deeposint",description:"Глубокая OSINT-корреляция"},
@@ -565,13 +570,71 @@ async function regionalSearchRequest(payload:any){
 }
 function parseRegionalArgs(v:string){const query=String(v??"").trim();return query?{query}:null}
 function regionalCsv(d:any){
-  const cols=["No","Name","Categories","Brand","Operator","Settlement","Settlement method","Settlement distance m","Address","Address quality","Normalized location","Latitude","Longitude","Sources","Source count","Resolution status","Confidence","Wikidata QID"];
+  const cols=["No","Name","Categories","Brand","Operator","Settlement","Settlement method","Settlement distance m","Address","Address quality","Normalized location","Latitude","Longitude","Distance m","Route distance m","Route along m","Route segment","Sources","Source count","Resolution status","Confidence","Wikidata QID"];
   const cell=(v:any)=>{const s=String(v??"");return /[",\n\r;]/.test(s)?'"'+s.replace(/"/g,'""')+'"':s};
-  const rows=(Array.isArray(d?.objects)?d.objects:[]).map((x:any,i:number)=>[i+1,x.canonical_name,(x.category_keys??[]).join(" | "),x.brand,x.operator,x.settlement,x.settlement_method,x.settlement_distance_m,x.address,x.address_quality,x.normalized_location,Number(x.latitude).toFixed(6),Number(x.longitude).toFixed(6),(Array.isArray(x.sources)?x.sources:[]).map((s:any)=>s.source+":"+s.source_id).join(" | "),x.source_count,x.resolution_status,x.resolution_confidence,x.wikidata_qid]);
+  const rows=(Array.isArray(d?.objects)?d.objects:[]).map((x:any,i:number)=>[i+1,x.canonical_name,(x.category_keys??[]).join(" | "),x.brand,x.operator,x.settlement,x.settlement_method,x.settlement_distance_m,x.address,x.address_quality,x.normalized_location,Number(x.latitude).toFixed(6),Number(x.longitude).toFixed(6),x.distance_m,x.route_distance_m,x.route_along_m,x.route_segment,(Array.isArray(x.sources)?x.sources:[]).map((s:any)=>s.source+":"+s.source_id).join(" | "),x.source_count,x.resolution_status,x.resolution_confidence,x.wikidata_qid]);
   return "\uFEFF"+[cols,...rows].map(r=>r.map(cell).join(",")).join("\r\n");
 }
 function regionalGeoJson(d:any){
-  return JSON.stringify({type:"FeatureCollection",name:"GeoWatch Regional Object Search",metadata:{oblast_code:d?.oblast?.code??d?.oblast_code??null,oblast_name:d?.oblast?.name_uk??d?.oblast_name??null,category_label:d?.category_label??null,summary:d?.summary??{}},features:(Array.isArray(d?.objects)?d.objects:[]).map((x:any)=>({type:"Feature",geometry:{type:"Point",coordinates:[Number(x.longitude),Number(x.latitude)]},properties:{name:x.canonical_name??null,categories:x.category_keys??[],brand:x.brand??null,operator:x.operator??null,settlement:x.settlement??null,settlement_method:x.settlement_method??null,settlement_distance_m:x.settlement_distance_m??null,address:x.address??null,address_quality:x.address_quality??null,normalized_location:x.normalized_location??null,source_count:x.source_count??0,sources:x.sources??[],resolution_status:x.resolution_status??null,resolution_confidence:x.resolution_confidence??0,wikidata_qid:x.wikidata_qid??null}}))},null,2);
+  return JSON.stringify({type:"FeatureCollection",name:"GeoWatch Regional Object Search",metadata:{oblast_code:d?.oblast?.code??d?.oblast_code??null,oblast_name:d?.oblast?.name_uk??d?.oblast_name??null,category_label:d?.category_label??null,summary:d?.summary??{}},features:(Array.isArray(d?.objects)?d.objects:[]).map((x:any)=>({type:"Feature",geometry:{type:"Point",coordinates:[Number(x.longitude),Number(x.latitude)]},properties:{name:x.canonical_name??null,categories:x.category_keys??[],brand:x.brand??null,operator:x.operator??null,settlement:x.settlement??null,settlement_method:x.settlement_method??null,settlement_distance_m:x.settlement_distance_m??null,address:x.address??null,address_quality:x.address_quality??null,normalized_location:x.normalized_location??null,source_count:x.source_count??0,sources:x.sources??[],resolution_status:x.resolution_status??null,resolution_confidence:x.resolution_confidence??0,distance_m:x.distance_m??null,route_distance_m:x.route_distance_m??null,route_along_m:x.route_along_m??null,route_segment:x.route_segment??null,wikidata_qid:x.wikidata_qid??null}}))},null,2);
+}
+function parseSpatialPointList(v:string,minPoints:number){
+  const pts=String(v??"").split(";").map(x=>x.trim()).filter(Boolean).map(x=>{
+    const m=x.match(/^(-?\d{1,2}(?:\.\d+)?)\s*[, ]\s*(-?\d{1,3}(?:\.\d+)?)$/);if(!m)return null;
+    const lat=Number(m[1]),lon=Number(m[2]);return Number.isFinite(lat)&&Number.isFinite(lon)&&lat>=-90&&lat<=90&&lon>=-180&&lon<=180?[lon,lat]:null;
+  });
+  if(pts.some(x=>!x)||pts.length<minPoints)return null;return pts as [number,number][];
+}
+function spatialModeText(sp:any){
+  const mode=String(sp?.mode??"—"),target=sp?.settlement_target;
+  if(target)return "город/НП: "+String(target.name??"—")+" • радиус "+(Number(target.applied_radius_m??sp.radius_m??0)/1000).toFixed(1)+" км • приблизительная зона";
+  if(mode==="radius")return "радиус "+(Number(sp?.radius_m??0)/1000).toFixed(1)+" км от "+Number(sp?.center?.lat??0).toFixed(5)+", "+Number(sp?.center?.lon??0).toFixed(5);
+  if(mode==="nearest")return "nearest "+Number(sp?.nearest_n??0)+" • поиск до "+(Number(sp?.search_radius_m??0)/1000).toFixed(1)+" км";
+  if(mode==="polygon")return "полигон • вершин "+Number(sp?.input_vertices??0);
+  if(mode==="route")return "маршрут "+(Number(sp?.route_length_m??0)/1000).toFixed(1)+" км • коридор ±"+(Number(sp?.corridor_m??0)/1000).toFixed(1)+" км";
+  return mode;
+}
+function spatialSearchText(d:any){
+  const s=d?.summary??{},sp=d?.spatial??s?.spatial??{},xs:any[]=Array.isArray(d?.objects)?d.objects:[],r=d?.resolution??s?.resolution??{},f=r?.filters??{},oblasts=(Array.isArray(d?.oblasts)?d.oblasts:[]).map((x:any)=>x.name_uk??x.code).filter(Boolean).join(", ");
+  const fs=Object.entries(f).filter(([,v])=>v).map(([k,v])=>k+"="+String(v)).join(" • ");
+  const lines=["🧭 SPATIAL OBJECT SEARCH",String(d?.category_label??d?.category_key??"—"),"Найдено: "+Number(s.resolved_objects??xs.length)+" • status "+String(d?.status??"—"),"Геометрия: "+spatialModeText(sp),"Области: "+(oblasts||"—")+(fs?"\nФильтры: "+fs:""),"OSM candidates: "+Number(s.osm_objects??0)+" • cache disabled",""];
+  xs.slice(0,20).forEach((x:any,i:number)=>{
+    const metric=x.distance_m!=null?" • "+Math.round(Number(x.distance_m))+" м от центра":x.route_distance_m!=null?" • "+Math.round(Number(x.route_distance_m))+" м от маршрута • along "+(Number(x.route_along_m??0)/1000).toFixed(1)+" км":"";
+    lines.push((i+1)+". "+String(x.canonical_name??"—")+(x.brand&&x.brand!==x.canonical_name?" • "+String(x.brand):"")+(x.settlement?" • "+String(x.settlement):"")+(x.address?" • "+String(x.address):"")+"\n   "+Number(x.latitude).toFixed(5)+", "+Number(x.longitude).toFixed(5)+metric+" • "+Number(x.source_count??0)+" src");
+  });
+  if(xs.length>20)lines.push("","Показаны первые 20 из "+xs.length+". CSV/GeoJSON доступны в Web Dashboard.");
+  if(!xs.length)lines.push("","Совпадений в подключённых публичных данных не найдено.");
+  if(Boolean(s.truncated))lines.push("","⚠️ Достигнут лимит источника/выдачи.");
+  if(Array.isArray(d?.errors)&&d.errors.length)lines.push("","⚠️ Partial: "+d.errors.slice(0,3).join(" | "));
+  lines.push("","Граница Украины проверяется точным PostGIS ST_Covers. Radius/route corridor — геометрическая зона, не административная граница.");
+  return lines.join("\n").slice(0,3900);
+}
+function parseSpatialCommand(raw:string,kind:"near"|"nearest"|"city"|"polygon"|"route"){
+  const rest=raw.replace(/^\/objects_(?:near|nearest|city|polygon|route)(?:@\w+)?\s*/i,"").trim();
+  if(kind==="near"){
+    const m=rest.match(/^(-?\d{1,2}(?:\.\d+)?)\s+(-?\d{1,3}(?:\.\d+)?)\s+(\d+(?:\.\d+)?)\s+(.+)$/);if(!m)return null;
+    const lat=Number(m[1]),lon=Number(m[2]),km=Number(m[3]);if(lat<-90||lat>90||lon<-180||lon>180||km<.1||km>50)return null;
+    return{query:m[4].trim(),spatial:{mode:"radius",lat,lon,radius_m:Math.round(km*1000)}};
+  }
+  if(kind==="nearest"){
+    const m=rest.match(/^(-?\d{1,2}(?:\.\d+)?)\s+(-?\d{1,3}(?:\.\d+)?)\s+(\d+)\s+(\d+(?:\.\d+)?)\s+(.+)$/);if(!m)return null;
+    const lat=Number(m[1]),lon=Number(m[2]),n=Number(m[3]),km=Number(m[4]);if(lat<-90||lat>90||lon<-180||lon>180||n<1||n>100||km<.5||km>100)return null;
+    return{query:m[5].trim(),spatial:{mode:"nearest",lat,lon,nearest_n:n,search_radius_m:Math.round(km*1000)}};
+  }
+  const parts=rest.split("|").map(x=>x.trim()).filter(Boolean);
+  if(kind==="city"){
+    if(parts.length<2||parts.length>3)return null;
+    const km=parts.length===3?Number(parts[1]):NaN,query=parts.length===3?parts[2]:parts[1];
+    if(parts.length===3&&(!Number.isFinite(km)||km<.1||km>50))return null;
+    return{query,spatial:{mode:"city",name:parts[0],...(Number.isFinite(km)?{radius_m:Math.round(km*1000)}:{})}};
+  }
+  if(kind==="polygon"){
+    if(parts.length!==2)return null;const pts=parseSpatialPointList(parts[1],3);if(!pts)return null;
+    const ring=[...pts];if(ring[0][0]!==ring[ring.length-1][0]||ring[0][1]!==ring[ring.length-1][1])ring.push([...ring[0]] as [number,number]);
+    return{query:parts[0],spatial:{mode:"polygon",geometry:{type:"Polygon",coordinates:[ring]}}};
+  }
+  if(parts.length!==3)return null;const km=Number(parts[1]),pts=parseSpatialPointList(parts[2],2);if(!pts||!Number.isFinite(km)||km<.1||km>20)return null;
+  return{query:parts[0],spatial:{mode:"route",route:pts,corridor_m:Math.round(km*1000)}};
 }
 function regionalSearchText(d:any){
   const s=d?.summary??{},res=d?.resolution??s?.resolution??{},xs:any[]=Array.isArray(d?.objects)?d.objects:[],filters=res?.filters??s?.filters??{},sf=s?.settlement_filter??null;
@@ -1170,7 +1233,7 @@ Deno.serve(async(req:Request)=>{
       return json({ok:true,processed:1});
     }
     if(low==="🏭 объекты области"){
-      await tg(token,"sendMessage",{chat_id:chatId,text:"🏭 Объекты области · Stage 43.1\n\nMulti:\n/objects Полтавская область АЗС + нефтебазы + резервуары\n\nФильтры:\nbrand:WOG city:Полтава operator:... address:... source:OSM confidence:90 has_address:yes\n\nБыстрый count:\n/objects_count Полтавская область АЗС brand:WOG\n\nРазбор запроса:\n/objects_explain Полтавская область трансформаторные подстанции 110 кВ\n\nЭкспорт:\n/objects_csv Полтавская область АЗС\n/objects_geojson Полтавская область АЗС\n\nНаселённый пункт при отсутствии addr:city может быть определён по ближайшему OSM place и помечается как inferred.",reply_markup:activeKeyboard});
+      await tg(token,"sendMessage",{chat_id:chatId,text:"🏭 Объекты области · Stage 43.1\n\nMulti:\n/objects Полтавская область АЗС + нефтебазы + резервуары\n\nФильтры:\nbrand:WOG city:Полтава operator:... address:... source:OSM confidence:90 has_address:yes\n\nБыстрый count:\n/objects_count Полтавская область АЗС brand:WOG\n\nРазбор запроса:\n/objects_explain Полтавская область трансформаторные подстанции 110 кВ\n\nЭкспорт:\n/objects_csv Полтавская область АЗС\n/objects_geojson Полтавская область АЗС\n\nНаселённый пункт при отсутствии addr:city может быть определён по ближайшему OSM place и помечается как inferred.\n\nSpatial:\n/objects_near 49.5883 34.5514 5 АЗС\n/objects_nearest 49.5883 34.5514 5 20 АЗС\n/objects_city Полтава | 10 | АЗС\n/objects_polygon АЗС | 49.53,34.45;49.53,34.65;49.65,34.65;49.65,34.45\n/objects_route АЗС | 2 | 49.55,34.40;49.62,34.75",reply_markup:activeKeyboard});
       return json({ok:true,processed:1});
     }
     if(low==="🛰 satellite"){
@@ -1190,6 +1253,26 @@ Deno.serve(async(req:Request)=>{
       try{const d=await regionalSearchRequest({query:q,count_only:true});await countRequest(sb,userId);await tg(token,"sendMessage",{chat_id:chatId,text:regionalCountText(d),reply_markup:activeKeyboard})}
       catch(e){await tg(token,"sendMessage",{chat_id:chatId,text:regionalErrorText(e),reply_markup:activeKeyboard})}
       return json({ok:true,processed:1});
+    }
+    if(low.startsWith("/objects_nearest")){
+      const p=parseSpatialCommand(raw,"nearest");if(!p){await tg(token,"sendMessage",{chat_id:chatId,text:"Использование: /objects_nearest <lat> <lon> <N> <search_km> <объект>\nПример: /objects_nearest 49.5883 34.5514 5 20 АЗС",reply_markup:activeKeyboard});return json({ok:true,processed:1});}
+      try{const d=await regionalSearchRequest(p);await countRequest(sb,userId);await tg(token,"sendMessage",{chat_id:chatId,text:spatialSearchText(d),reply_markup:activeKeyboard,disable_web_page_preview:true})}catch(e){await tg(token,"sendMessage",{chat_id:chatId,text:regionalErrorText(e),reply_markup:activeKeyboard})}return json({ok:true,processed:1});
+    }
+    if(low.startsWith("/objects_near")){
+      const p=parseSpatialCommand(raw,"near");if(!p){await tg(token,"sendMessage",{chat_id:chatId,text:"Использование: /objects_near <lat> <lon> <radius_km> <объект>\nПример: /objects_near 49.5883 34.5514 5 АЗС",reply_markup:activeKeyboard});return json({ok:true,processed:1});}
+      try{const d=await regionalSearchRequest(p);await countRequest(sb,userId);await tg(token,"sendMessage",{chat_id:chatId,text:spatialSearchText(d),reply_markup:activeKeyboard,disable_web_page_preview:true})}catch(e){await tg(token,"sendMessage",{chat_id:chatId,text:regionalErrorText(e),reply_markup:activeKeyboard})}return json({ok:true,processed:1});
+    }
+    if(low.startsWith("/objects_city")){
+      const p=parseSpatialCommand(raw,"city");if(!p){await tg(token,"sendMessage",{chat_id:chatId,text:"Использование: /objects_city <город> | [radius_km] | <объект>\nПример: /objects_city Полтава | 10 | АЗС\nИли: /objects_city Полтава | АЗС",reply_markup:activeKeyboard});return json({ok:true,processed:1});}
+      try{const d=await regionalSearchRequest(p);await countRequest(sb,userId);await tg(token,"sendMessage",{chat_id:chatId,text:spatialSearchText(d),reply_markup:activeKeyboard,disable_web_page_preview:true})}catch(e){await tg(token,"sendMessage",{chat_id:chatId,text:regionalErrorText(e),reply_markup:activeKeyboard})}return json({ok:true,processed:1});
+    }
+    if(low.startsWith("/objects_polygon")){
+      const p=parseSpatialCommand(raw,"polygon");if(!p){await tg(token,"sendMessage",{chat_id:chatId,text:"Использование: /objects_polygon <объект> | lat,lon;lat,lon;lat,lon...\nПример: /objects_polygon АЗС | 49.53,34.45;49.53,34.65;49.65,34.65;49.65,34.45",reply_markup:activeKeyboard});return json({ok:true,processed:1});}
+      try{const d=await regionalSearchRequest(p);await countRequest(sb,userId);await tg(token,"sendMessage",{chat_id:chatId,text:spatialSearchText(d),reply_markup:activeKeyboard,disable_web_page_preview:true})}catch(e){await tg(token,"sendMessage",{chat_id:chatId,text:regionalErrorText(e),reply_markup:activeKeyboard})}return json({ok:true,processed:1});
+    }
+    if(low.startsWith("/objects_route")){
+      const p=parseSpatialCommand(raw,"route");if(!p){await tg(token,"sendMessage",{chat_id:chatId,text:"Использование: /objects_route <объект> | <corridor_km> | lat,lon;lat,lon...\nПример: /objects_route АЗС | 2 | 49.55,34.40;49.62,34.75",reply_markup:activeKeyboard});return json({ok:true,processed:1});}
+      try{const d=await regionalSearchRequest(p);await countRequest(sb,userId);await tg(token,"sendMessage",{chat_id:chatId,text:spatialSearchText(d),reply_markup:activeKeyboard,disable_web_page_preview:true})}catch(e){await tg(token,"sendMessage",{chat_id:chatId,text:regionalErrorText(e),reply_markup:activeKeyboard})}return json({ok:true,processed:1});
     }
     if(low.startsWith("/objects_geojson")){
       const q=raw.split(/\s+/).slice(1).join(" ").trim(),p=parseRegionalArgs(q);
