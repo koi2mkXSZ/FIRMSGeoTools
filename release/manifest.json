@@ -85,6 +85,7 @@
     "firewatch-media",
     "firewatch-modis",
     "firewatch-neptun",
+    "firewatch-neptun-backfill",
     "firewatch-osint",
     "firewatch-osint-fusion",
     "firewatch-osint-semantic",
@@ -99,13 +100,13 @@
     "firewatch-source-audit",
     "firewatch-telegram",
     "firewatch-telegram-osint",
+    "firewatch-temporal-correlation",
     "firewatch-ua",
     "firewatch-visual-context",
     "firewatch-watchdog",
     "imagescript-inspect",
     "sentinel5p-inspect",
-    "telegram-check",
-    "firewatch-temporal-correlation"
+    "telegram-check"
   ],
   "stable_requires": [
     "fresh-project install passed",
