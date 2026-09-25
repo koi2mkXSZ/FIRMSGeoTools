@@ -83,10 +83,10 @@ function routeWindows(route:LngLat[],corridor:number,maxChunkM=90000){
  const out:Array<[number,number,number,number]>=[];let chunk:LngLat[]=[route[0]],len=0;
  for(let i=1;i<route.length;i++){
   const d=haversineM(route[i-1][1],route[i-1][0],route[i][1],route[i][0]);
-  if(len+d>maxChunkM&&chunk.length>1){out.push(expandBboxM(bboxOf(chunk),corridor);chunk=[route[i-1]];len=0}
+  if(len+d>maxChunkM&&chunk.length>1){out.push(expandBboxM(bboxOf(chunk),corridor));chunk=[route[i-1]];len=0}
   chunk.push(route[i]);len+=d;
  }
- if(chunk.length>1)out.push(expandBbox(bboxOf(chunk),corridor));
+ if(chunk.length>1)out.push(expandBboxM(bboxOf(chunk),corridor));
  return out;
 }
 function lineCoords(v:any){
