@@ -55,3 +55,4 @@ jobs:
           deno test --config supabase/functions/firewatch-regional-search/deno.json supabase/functions/firewatch-regional-search/region_aliases_test.ts
           deno test --config supabase/functions/firewatch-regional-search/deno.json supabase/functions/firewatch-regional-search/regional_categories_test.ts
           deno test --config supabase/functions/firewatch-regional-search/deno.json supabase/functions/firewatch-regional-search/regional_enrichment_test.ts
+          deno test --config supabase/functions/firewatch-regional-search/deno.json supabase/functions/firewatch-regional-search/regional_spatial_test.ts
