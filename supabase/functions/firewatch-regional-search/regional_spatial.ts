@@ -116,14 +116,14 @@ export function buildSpatialPlan(input:any):SpatialPlan{
    const b=circleBbox(lat,lon,r);return{mode,bbox:b,query_bboxes:[b],center:{lat,lon},radius_m:r,input_vertices:[[lon,lat]]};
   }
   const n=Math.round(finite(s.nearest_n??s.limit??10));if(!Number.isFinite(n)||n<1||n>100)throw new Error("nearest_n must be 1..100");
-  const r=finite(s.search_radius_m??(finite(s.search_radius_km)*1000)||50000);if(!Number.isFinite(r)||r<500||r>100000)throw new Error("search_radius_m must be 500..100000");
+  const rk=finite(s.search_radius_km),r=finite(s.search_radius_m??(Number.isFinite(rk)?rk*1000:50000));if(!Number.isFinite(r)||r<500||r>100000)throw new Error("search_radius_m must be 500..100000");
   const b=circleBbox(lat,lon,r);return{mode,bbox:b,query_bboxes:[b],center:{lat,lon},search_radius_m:r,nearest_n:n,input_vertices:[[lon,lat]]};
  }
  if(mode==="polygon"){
   const p=polygonGeometry(s.geometry??s.polygon);return{mode,bbox:p.b,query_bboxes:[p.b],geometry:p.g,input_vertices:p.cs};
  }
  if(mode==="route"){
-  const route=lineCoords(s.geometry??s.route),corridor=finite(s.corridor_m??(finite(s.corridor_km)*1000)||2000);
+  const route=lineCoords(s.geometry??s.route),ck=finite(s.corridor_km),corridor=finite(s.corridor_m??(Number.isFinite(ck)?ck*1000:2000));
   if(!Number.isFinite(corridor)||corridor<100||corridor>20000)throw new Error("corridor_m must be 100..20000");
   const len=routeLengthM(route);if(len>1000000)throw new Error("route length exceeds 1000 km");
   const b=expandBboxM(bboxOf(route),corridor),boxes=routeWindows(route,corridor);if(boxes.length>16)throw new Error("route requires too many query windows");
