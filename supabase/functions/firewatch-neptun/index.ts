@@ -2,7 +2,7 @@
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "@supabase/supabase-js";
 
-const PROFILE="stage37.3-neptun-v1";
+const PROFILE="stage43.2.2-neptun-v2";
 const API="https://neptun.in.ua/api/data";
 const MAX_DISTANCE_M=50000;
 const MAX_TIME_OFFSET_S=6*3600;
@@ -96,7 +96,7 @@ Deno.serve(async(req:Request)=>{
 
   let correlation:any={ok:false,error:"not_run"};
   try{
-    const {data:cr,error:ce}=await sb.rpc("firewatch_rebuild_neptun_context",{p_hours:24})
+    const {data:cr,error:ce}=await sb.rpc("firewatch_rebuild_neptun_context",{p_hours:168})
       .abortSignal(AbortSignal.timeout(20000));
     if(ce)throw ce;correlation=cr??{ok:true};
   }catch(e){
@@ -104,11 +104,10 @@ Deno.serve(async(req:Request)=>{
     warnings.push("correlation rebuild: "+correlation.error);
   }
 
-  const {data:affectedRows}=await sb.from("event_air_threat_context")
-    .select("fire_event_id")
-    .gte("updated_at",startedIso)
-    .limit(300);
-  const affected=[...new Set((affectedRows??[]).map((x:any)=>String(x.fire_event_id)))].slice(0,40);
+  const affected=[...new Set(
+    (Array.isArray(correlation?.changed_event_ids)?correlation.changed_event_ids:[])
+      .map((x:any)=>String(x))
+  )].slice(0,80);
   for(let i=0;i<affected.length;i+=4){
     await Promise.allSettled(affected.slice(i,i+4).map((id:string)=>
       sb.rpc("firewatch_refresh_event_dossier",{p_event:id})
@@ -123,8 +122,11 @@ Deno.serve(async(req:Request)=>{
     ballistic_threat:Boolean(data?.ballistic_threat),history_snapshots_attempted:normalized.length,
     history_snapshots_inserted:historyInserted,
     proximity_candidates:Number(correlation?.context_rows??0),closest_context_updates:Number(correlation?.event_count??0),
+    correlation_changed_events:Number(correlation?.changed_events??0),correlation_removed_events:Number(correlation?.removed_context_events??0),
     context_before_or_at_firms:Number(correlation?.before_or_at_firms??0),context_after_firms_fallback:Number(correlation?.after_firms_fallback??0),
-    match_radius_km:50,time_window_before_hours:6,time_window_after_minutes:30,correlation_mode:"historical_preferred",
+    match_radius_km:50,time_window_before_hours:6,time_window_after_minutes:30,correlation_window_hours:168,
+    correlation_mode:"historical_preferred_idempotent",published_at_available:false,
+    source_time_semantics:"Neptun API m.date -> observed/source timestamp",ingested_time_semantics:"GeoWatch sampled_at at fetch time",
     warnings:warnings.slice(-20),
     policy:"Public Neptun air-threat tracks are contextual evidence only. Historical snapshots are matched around FIRMS acquisition time; pre-FIRMS context is preferred. Spatial/temporal proximity does not establish causation.",
     source:"https://neptun.in.ua/api/data"

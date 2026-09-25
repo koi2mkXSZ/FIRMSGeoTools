@@ -40,6 +40,9 @@ jobs:
         run: |
           deno check --config supabase/functions/firewatch-firms/deno.json supabase/functions/firewatch-firms/index.ts
           deno check --config supabase/functions/firewatch-telegram/deno.json supabase/functions/firewatch-telegram/index.ts
+          deno check --config supabase/functions/firewatch-ua/deno.json supabase/functions/firewatch-ua/index.ts
+          deno check --config supabase/functions/firewatch-neptun/deno.json supabase/functions/firewatch-neptun/index.ts
+          deno test --config supabase/functions/firewatch-ua/deno.json supabase/functions/firewatch-ua/neptun_time_test.ts
           deno check --config supabase/functions/firewatch-setup/deno.json supabase/functions/firewatch-setup/index.ts
           deno check --config supabase/functions/firewatch-doctor/deno.json supabase/functions/firewatch-doctor/index.ts
           deno check --config supabase/functions/firewatch-admin/deno.json supabase/functions/firewatch-admin/index.ts

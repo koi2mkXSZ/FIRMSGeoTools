@@ -1,5 +1,6 @@
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "@supabase/supabase-js";
+import { formatNeptunRelation } from "./neptun_time.ts";
 
 const FIRMS_BASE="https://firms.modaps.eosdis.nasa.gov/api/area/csv";
 const SOURCES=["VIIRS_NOAA20_NRT","VIIRS_NOAA21_NRT"] as const;
@@ -91,8 +92,7 @@ function publicEnrichmentLines(r:Rollup){
   const air=c.air_threat;
   if(air&&Number.isFinite(Number(air.nearest_distance_m))){
     const d=Number(air.nearest_distance_m),dist=d<1000?`${Math.round(d)} м`:`${(d/1000).toFixed(1)} км`;
-    const off=Number(air.time_offset_seconds??0),mins=Math.round(Math.abs(off)/60);
-    const rel=off===0?"одновременно":off<0?`${mins} мин до FIRMS`:`${mins} мин после FIRMS`;
+    const rel=formatNeptunRelation(air.time_offset_seconds);
     let line=`Neptun: ${String(air.label??air.type??"air threat")} • ${dist} • ${rel}`;
     if(Number.isFinite(Number(air.heading_deg)))line+=` • курс ${Math.round(Number(air.heading_deg))}°`;
     if(Number.isFinite(Number(air.confidence_0_100)))line+=` • conf ${Math.round(Number(air.confidence_0_100))}/100`;
