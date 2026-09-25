@@ -21,7 +21,7 @@ Deno.serve(async(req:Request)=>{
  if(!Number.isFinite(exp)||exp<now||exp>now+12*3600||!sig)return html("<h1>GeoWatch</h1><p>Ссылка недействительна или истекла.</p>",401);
  const {data:secret,error:se}=await sb.rpc("firewatch_optional_vault_secret",{p_name:"firewatch_cron_secret"});if(se||!secret)return json({ok:false,error:"auth secret unavailable"},503);
  if(!safeEq(sig,await hmac(String(secret),"dashboard:"+String(exp))))return html("<h1>GeoWatch</h1><p>Ссылка недействительна.</p>",401);
- const action=u.searchParams.get("action");if(!action)return json({ok:true,service:"GeoWatch Dashboard API",version:"stage43.1-dashboard-v1"});
+ const action=u.searchParams.get("action");if(!action)return json({ok:true,service:"GeoWatch Dashboard API",version:"stage43.5-dashboard-v1"});
  try{
   const body:any=req.method==="POST"?await req.json().catch(()=>({})):{};
   if(action==="bootstrap"){
@@ -30,8 +30,8 @@ Deno.serve(async(req:Request)=>{
    if(s.error)throw s.error;if(a.error)throw a.error;if(e.error)throw e.error;return json({ok:true,snapshot:s.data||{},analytics:a.data||{},search:e.data||{}});
   }
   if(action==="search"){const f=body&&typeof body.filters==="object"?body.filters:{};f.limit=Math.min(Number(f.limit||50),50);const {data,error}=await sb.rpc("firewatch_search_events",{p_filters:f});if(error)throw error;return json(data||{count:0,events:[]})}
-  if(action==="detail"){const id=String(body.id||"").trim();const {data:e,error}=await sb.rpc("firewatch_event_detail",{p_query:id||null});if(error)throw error;if(!e)return json({ok:false,error:"not found"},404);const {data:s}=await sb.rpc("firewatch_satellite_evidence",{p_query:id||null});return json({ok:true,event:{...e,surface_status:s?.status??"pending",dnbr:s?.dnbr??null,dndvi:s?.dndvi??null}})}
-  if(action==="timeline"){const id=String(body.id||"").trim();const {data,error}=await sb.rpc("firewatch_event_timeline",{p_query:id||null});if(error)throw error;if(!data)return json({ok:false,error:"not found"},404);return json({ok:true,timeline:data})}
+  if(action==="detail"){const id=String(body.id||"").trim();const [{data:e,error},{data:s},{data:t}]=await Promise.all([sb.rpc("firewatch_event_detail",{p_query:id||null}),sb.rpc("firewatch_satellite_evidence",{p_query:id||null}),sb.from("event_temporal_correlations").select("*").eq("fire_event_id",id).maybeSingle()]);if(error)throw error;if(!e)return json({ok:false,error:"not found"},404);return json({ok:true,event:{...e,surface_status:s?.status??"pending",dnbr:s?.dnbr??null,dndvi:s?.dndvi??null},temporal_correlation:t??null})}
+  if(action==="timeline"){const id=String(body.id||"").trim();const [{data,error},{data:t}]=await Promise.all([sb.rpc("firewatch_event_timeline",{p_query:id||null}),sb.from("event_temporal_correlations").select("*").eq("fire_event_id",id).maybeSingle()]);if(error)throw error;if(!data)return json({ok:false,error:"not found"},404);return json({ok:true,timeline:data,temporal_correlation:t??null})}
   if(action==="intel"){const id=String(body.id||"").trim();if(!id)return json({ok:false,error:"missing id"},400);const {data,error}=await sb.rpc("firewatch_dashboard_event_intel",{p_query:id});if(error)throw error;if(!data)return json({ok:false,error:"not found"},404);return json({ok:true,...data})}
   if(action==="area"){
    const id=String(body.id||"").trim();if(!id)return json({ok:false,error:"missing id"},400);
