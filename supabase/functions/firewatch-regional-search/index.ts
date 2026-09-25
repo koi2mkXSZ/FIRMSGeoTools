@@ -109,8 +109,14 @@ async function resolveOblast(sb:any,q:any){const rows=await oblastRows(sb),best=
 
 async function spatialGate(sb:any,points:Array<{lat:number;lon:number}>){
  if(!points.length)return{count:0,inside_count:0,points:[]};
- const {data,error}=await sb.rpc("firewatch_spatial_gate",{p_points:points});if(error)throw error;
- return data??{count:0,inside_count:0,points:[]};
+ const out:any[]=[];let inside=0;
+ for(let offset=0;offset<points.length;offset+=10000){
+  const batch=points.slice(offset,offset+10000),{data,error}=await sb.rpc("firewatch_spatial_gate",{p_points:batch});if(error)throw error;
+  const rows=Array.isArray(data?.points)?data.points:[];
+  for(const p of rows)out.push({...p,idx:offset+Number(p?.idx??0)});
+  inside+=Number(data?.inside_count??0);
+ }
+ return{count:points.length,inside_count:inside,points:out};
 }
 function gateOblasts(g:any){
  const m=new Map<string,any>();
