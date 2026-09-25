@@ -1,7 +1,7 @@
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "@supabase/supabase-js";
 
-const VERSION="stage30-report-v1";
+const VERSION="stage43.5-report-v1";
 const BUCKET="event-reports";
 const EXPECTED_CLASSES=["satellite","satellite_surface","atmosphere","geospatial","infrastructure","ground","external_osint","history"];
 
@@ -48,9 +48,17 @@ function externalRows(d:any){
   for(const x of arr(d?.external_osint?.evidence).slice(0,20))rows.push(`<tr><td>${esc(x.source)}</td><td>${esc(x.title??x.category)}</td><td>${esc(x.correlation_class)}</td><td>${x.distance_km==null?"—":n(x.distance_km,1)+" km"}</td><td>${dt(x.observed_at)}</td><td>${link(x.source_url,"source")}</td></tr>`);
   return rows.join("")||'<tr><td colspan="6">—</td></tr>';
 }
+function temporalRows(d:any){
+  const rows:string[]=[];
+  for(const x of arr(d?.temporal_correlation?.timeline).slice(0,30)){
+    const off=Number(x?.offset_seconds),s=Number.isFinite(off)?(off>0?"+":"")+String(off)+" s":"—";
+    rows.push(`<tr><td>${esc(x.source??x.family)}</td><td>${esc(x.time_semantics??"—")}</td><td>${dt(x.source_time)}</td><td>${esc(s)}</td><td>${esc(x.relation??"—")}</td><td>${esc(x.label??"—")}</td></tr>`);
+  }
+  return rows.join("")||'<tr><td colspan="6">—</td></tr>';
+}
 
 function html(d:any,generatedAt:string,visualUrl:string|null){
-  const e=d?.event??{},sat=d?.satellite??{},surf=d?.satellite_surface??{},atm=d?.atmosphere??{},geo=d?.geospatial??{},inf=d?.infrastructure??{},hist=d?.history??{};
+  const e=d?.event??{},sat=d?.satellite??{},surf=d?.satellite_surface??{},atm=d?.atmosphere??{},geo=d?.geospatial??{},inf=d?.infrastructure??{},hist=d?.history??{},tmp=d?.temporal_correlation??{};
   const cov=evidenceCoverage(d),flags=arr(d?.context_flags).map(String),classes=arr(d?.evidence_classes).map(String);
   const b=surf?.before??null,a=surf?.after??null;
   const visual=visualUrl?`<div class="visual"><img src="${esc(visualUrl)}" alt="Sentinel-2 surface evidence montage"></div>`:"<p>Visual montage unavailable or not yet generated.</p>";
@@ -109,10 +117,22 @@ ${visual}
 <div class="card"><h2>6. External OSINT</h2>
 <table><thead><tr><th>Source</th><th>Title/category</th><th>Correlation</th><th>Distance</th><th>Time</th><th>Link</th></tr></thead><tbody>${externalRows(d)}</tbody></table></div>
 
-<div class="card"><h2>7. История точки</h2><div class="grid">
+<div class="card"><h2>7. Temporal Correlation</h2><div class="grid">
+<div class="kv"><b>Level</b><br>${esc(tmp.consistency_level??"unknown")}</div>
+<div class="kv"><b>Consistency</b><br>${tmp.consistency_score==null?"—":esc(tmp.consistency_score)+"/100"}</div>
+<div class="kv"><b>Alignment</b><br>${tmp.alignment_score==null?"—":esc(tmp.alignment_score)+"/100"}</div>
+<div class="kv"><b>Coverage</b><br>${esc(tmp.coverage_score??0)}%</div>
+<div class="kv"><b>Reference</b><br>${dt(tmp.reference_time)}<br>${esc(tmp.reference_source??"FIRMS first_seen")}</div>
+<div class="kv"><b>Families / sources</b><br>${esc(tmp.family_count??0)} / ${esc(tmp.source_count??0)}</div>
+</div>
+<table><thead><tr><th>Source</th><th>Time semantics</th><th>Source time</th><th>Δ FIRMS</th><th>Relation</th><th>Label</th></tr></thead><tbody>${temporalRows(d)}</tbody></table>
+<p><b>Flags:</b> ${arr(tmp.flags).map(x=>`<span class="tag">${esc(x)}</span>`).join("")||"—"}</p>
+<div class="warn"><b>Interpretation:</b> publication, observation and acquisition timestamps remain distinct. Temporal proximity is contextual evidence only and does not establish cause or attribution.</div></div>
+
+<div class="card"><h2>8. История точки</h2><div class="grid">
 <div class="kv"><b>30 days</b><br>${esc(hist.events_30d??0)}</div><div class="kv"><b>90 days</b><br>${esc(hist.events_90d??0)}</div><div class="kv"><b>365 days</b><br>${esc(hist.events_365d??0)}</div><div class="kv"><b>Hotspot class</b><br>${esc(hist.hotspot_class??"—")}</div></div></div>
 
-<div class="card"><h2>8. Evidence coverage & context flags</h2>
+<div class="card"><h2>9. Evidence coverage & context flags</h2>
 <p><b>Available classes:</b> ${classes.map(x=>`<span class="tag">${esc(x)}</span>`).join("")||"—"}</p>
 <p><b>Not currently represented:</b> ${cov.missing.map(x=>`<span class="tag">${esc(x)}</span>`).join("")||"none"}</p>
 <p><b>Context flags:</b> ${flags.map(x=>`<span class="tag">${esc(x)}</span>`).join("")||"—"}</p>
@@ -169,6 +189,8 @@ Deno.serve(async(req:Request)=>{
     const {data:d,error:de}=await sb.rpc("firewatch_dossier",{p_query:q});
     if(de)throw de;if(!d?.event?.id)return json({ok:false,error:"event not found"},404);
     const eventId=String(d.event.id),generatedAt=new Date().toISOString();
+    const {data:temporal,error:te}=await sb.from("event_temporal_correlations").select("*").eq("fire_event_id",eventId).maybeSingle();
+    if(te)throw te;(d as any).temporal_correlation=temporal??null;
 
     let visualUrl:string|null=null;
     const visualPath=d?.satellite_surface?.visual?.storage_path;
