@@ -53,6 +53,7 @@ async function touch(sb:any,u:any){
     p_last_name:u.last_name??null
   });
   if(error)throw error;
+  if(data?.event?.id){const {data:t}=await sb.from("event_temporal_correlations").select("*").eq("fire_event_id",String(data.event.id)).maybeSingle();(data as any).temporal_correlation=t??null;}
   return data;
 }
 async function redeem(sb:any,u:any,code:string){
@@ -345,7 +346,7 @@ function dossierTextClient(d:any){
   if(!d)return "📑 EVENT OSINT DOSSIER\n\nСобытие не найдено или досье ещё не сформировано.";
   const e=d.event??{},sat=d.satellite??{},surf=d.satellite_surface??{},atm=d.atmosphere??{},geo=d.geospatial??{},
         inf=d.infrastructure??{},ground=d.ground??{},ext=d.external_osint??{},pub=d.public_osint??{},
-        air=d.air_threat_context??{},hist=d.history??{},pri=d.priority??{};
+        air=d.air_threat_context??{},hist=d.history??{},pri=d.priority??{},tmp=d.temporal_correlation??{};
   const flags:string[]=Array.isArray(d.context_flags)?d.context_flags:[];
   const classes:string[]=Array.isArray(d.evidence_classes)?d.evidence_classes:[];
   const infra:any[]=Array.isArray(inf.features)?inf.features:[];
@@ -418,6 +419,7 @@ function dossierTextClient(d:any){
     lines.push("• "+String(x.label??x.type??"air threat")+" • "+dist+" • "+when+head+conf);
   }
 
+  if(tmp.profile_version)lines.push("","⏱ Temporal Correlation: "+String(tmp.consistency_level??"unknown")+" • "+(tmp.consistency_score==null?"—":Math.round(Number(tmp.consistency_score))+"/100")+" • coverage "+Math.round(Number(tmp.coverage_score??0))+"%","Источников: "+Number(tmp.source_count??0)+" • семейств: "+Number(tmp.family_count??0),"Времена source/observation/publication не смешиваются; близость по времени не устанавливает причинность.");
   lines.push(
     "",
     "🕓 История: 30д "+Number(hist.events_30d??0)+" • 90д "+Number(hist.events_90d??0)+" • 365д "+Number(hist.events_365d??0)+" • класс "+String(hist.hotspot_class??"—"),
