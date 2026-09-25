@@ -4,6 +4,7 @@ import { diceSimilarity as dice, normalizeRegionQuery as norm, resolveOblastRow,
 import { REGIONAL_SPECS as SPECS, type RegionalSpec as Spec, buildFilterPredicate, extractRegionalFilters, mergeFilters, multiKey, normalizeFilters, parseRegionalQuery, resolveCategoryList, splitObjectExpression, validateRegionalCategories } from "./regional_categories.ts";
 import { applyObjectFilters, applySettlementTarget, enrichSettlements, resolveSettlementTarget, toGeoJson, type SettlementCandidate } from "./regional_enrichment.ts";
 import { applySpatialPlan, buildSpatialPlan, expandBboxM, spatialSummary, type SpatialPlan } from "./regional_spatial.ts";
+import { analyzeSpatial } from "./regional_spatial_analytics.ts";
 
 const POSTPASS="https://postpass.geofabrik.de/api/interpreter";
 const FUSED="https://www.fused.io/server/v1/realtime-shared/UDF_Overture_Maps_Example/run/tiles";
@@ -206,8 +207,9 @@ async function spatialSearch(sb:any,body:any){
  const sourceFilter=norm(filters.source??""),needWikidata=body.count_only!==true||["wikidata","wd"].includes(sourceFilter);let wd:any[]=[];
  if(needWikidata){try{wd=await wikidataByQids(ukraineRows)}catch(e){errors.push("Wikidata: "+errText(e))}}
  const resolved=resolve([...ukraineRows,...wd],spec),enriched=enrichSettlements(resolved,settlements),postFiltered=applyObjectFilters(enriched.objects,filters),spatialFiltered=applySpatialPlan(postFiltered,plan),objects=spatialFiltered.slice(0,OUTPUT_LIMIT),truncated=osmTruncated||spatialFiltered.length>OUTPUT_LIMIT;
+ const analytics=analyzeSpatial(objects,plan);
  const byCategory:any={};for(const x of objects)for(const k of Array.isArray(x.category_keys)?x.category_keys:[])byCategory[k]=(byCategory[k]??0)+1;
- const status=osmStatus!=="active"||settlementStatus==="error"||truncated?"degraded":"active",summary={resolved_objects:objects.length,base_resolved_objects:resolved.length,filtered_out:Math.max(0,resolved.length-objects.length),multi_source:objects.filter((x:any)=>x.source_count>1).length,osm_objects:ukraineRows.length,wikidata_objects:wd.length,truncated,cache_ttl_hours:0,resolution,filters,category_count:specs.length,by_category:byCategory,addressing:enriched.summary,spatial:ssum};
+ const status=osmStatus!=="active"||settlementStatus==="error"||truncated?"degraded":"active",summary={resolved_objects:objects.length,base_resolved_objects:resolved.length,filtered_out:Math.max(0,resolved.length-objects.length),multi_source:objects.filter((x:any)=>x.source_count>1).length,osm_objects:ukraineRows.length,wikidata_objects:wd.length,truncated,cache_ttl_hours:0,resolution,filters,category_count:specs.length,by_category:byCategory,addressing:enriched.summary,spatial:ssum,analytics};
  const source_status={osm_postpass:osmStatus,osm_queries_total:jobs.length,osm_queries_ok:osmOk,settlement_enrichment:settlementStatus,settlement_candidates:settlements.length,wikidata:needWikidata?(wd.length?"active":"not_applicable"):"skipped_count_only",overture:"not_applicable",overture_reason:"stage43_2_spatial_osm_primary"};
  const involvedGate={points:[...(Array.isArray(inputGate?.points)?inputGate.points:[]),...(Array.isArray(gatedObjects.gate?.points)?gatedObjects.gate.points:[]),...(Array.isArray(placeGate?.points)?placeGate.points:[])]};const payload={ok:true,cached:false,status,category_key:spec.key,category_label:spec.label,resolution,spatial:ssum,oblasts:gateOblasts(involvedGate),source_status,summary,objects,errors,policy:"Spatial candidates are filtered by the requested geometry and exact Ukraine oblast polygons. Route corridors and radius searches are geometric approximations around the supplied line or point. Public-source completeness depends on OSM tagging and source availability."};
  const format=String(body.format??"").toLowerCase();
