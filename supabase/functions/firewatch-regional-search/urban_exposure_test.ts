@@ -10,7 +10,7 @@ Deno.test("industrial profile",()=>{
 });
 Deno.test("mixed urban industrial profile",()=>{
  const x=buildUrbanExposure({population_1km:5000,built_fraction_1km_pct:21,population_5km:42000,built_fraction_5km_pct:18},{total:400,buildings:260,residential_landuse:12,industrial_landuse:10,commercial_landuse:3,retail_landuse:2,amenities:35,shops:18,offices:8,transport:9,industrial_objects:15,area_km2:20});
- assertEquals(x.class,"mixed_urban_industrial");
+ assertEquals(x.class,"mixed");
 });
 Deno.test("rural profile",()=>{
  const x=buildUrbanExposure({population_1km:70,built_fraction_1km_pct:1.1,population_5km:900,built_fraction_5km_pct:1.6},{total:8,buildings:5,residential_landuse:0,industrial_landuse:0,commercial_landuse:0,retail_landuse:0,amenities:1,shops:0,offices:0,transport:0,industrial_objects:0,area_km2:78});
@@ -19,4 +19,13 @@ Deno.test("rural profile",()=>{
 Deno.test("unknown when no evidence",()=>{
  const x=buildUrbanExposure(null,{total:0,buildings:0,residential_landuse:0,industrial_landuse:0,commercial_landuse:0,retail_landuse:0,amenities:0,shops:0,offices:0,transport:0,industrial_objects:0,area_km2:null});
  assertEquals(x.class,"unknown");
+});
+
+Deno.test("forest profile",()=>{
+ const x=buildUrbanExposure({population_1km:40,built_fraction_1km_pct:.8,population_5km:500,built_fraction_5km_pct:1.2},{total:14,buildings:3,residential_landuse:0,industrial_landuse:0,commercial_landuse:0,retail_landuse:0,forest_landuse:7,agricultural_landuse:0,amenities:0,shops:0,offices:0,transport:0,industrial_objects:0,area_km2:12.566});
+ assertEquals(x.class,"forest");
+});
+Deno.test("agricultural profile",()=>{
+ const x=buildUrbanExposure({population_1km:90,built_fraction_1km_pct:1.3,population_5km:900,built_fraction_5km_pct:1.8},{total:16,buildings:6,residential_landuse:0,industrial_landuse:0,commercial_landuse:0,retail_landuse:0,forest_landuse:0,agricultural_landuse:8,amenities:0,shops:0,offices:0,transport:0,industrial_objects:0,area_km2:12.566});
+ assertEquals(x.class,"agricultural");
 });
