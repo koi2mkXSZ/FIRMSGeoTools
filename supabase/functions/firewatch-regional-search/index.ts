@@ -5,6 +5,7 @@ import { REGIONAL_SPECS as SPECS, type RegionalSpec as Spec, buildFilterPredicat
 import { applyObjectFilters, applySettlementTarget, enrichSettlements, resolveSettlementTarget, toGeoJson, type SettlementCandidate } from "./regional_enrichment.ts";
 import { applySpatialPlan, applySpatialPlanAll, buildSpatialPlan, expandBboxM, spatialSummary, type SpatialPlan } from "./regional_spatial.ts";
 import { analyzeSpatial } from "./regional_spatial_analytics.ts";
+import { buildUrbanExposure } from "./urban_exposure.ts";
 
 const POSTPASS="https://postpass.geofabrik.de/api/interpreter";
 const FUSED="https://www.fused.io/server/v1/realtime-shared/UDF_Overture_Maps_Example/run/tiles";
@@ -14,6 +15,9 @@ const RAW_LIMIT=7000;
 const OUTPUT_LIMIT=5000;
 const SETTLEMENT_LIMIT=20000;
 const CACHE_VERSION="r43_1_3";
+const URBAN_CONTEXT_LIMIT=8000;
+const URBAN_PROFILE="urban-exposure-v1";
+const URBAN_GHSL_CACHE_MS=30*24*3600_000;
 
 function json(x:unknown,s=200){return new Response(JSON.stringify(x,null,2),{status:s,headers:{"content-type":"application/json; charset=utf-8","cache-control":"no-store"}})}
 function errText(e:any){return e instanceof Error?e.message:(e&&typeof e==="object"?JSON.stringify({code:e.code,message:e.message,details:e.details,hint:e.hint}):String(e))}
@@ -40,6 +44,66 @@ WHERE geom && ST_MakeEnvelope(${minLon.toFixed(7)},${minLat.toFixed(7)},${maxLon
   AND tags->>'place' IN ('city','town','village','hamlet')
   AND coalesce(tags->>'name:uk',tags->>'name:ru',tags->>'name',tags->>'name:en') IS NOT NULL
 LIMIT ${SETTLEMENT_LIMIT}`}
+function postpassUrbanSql(b:number[]){const [minLon,minLat,maxLon,maxLat]=b.map(Number);return `
+SELECT osm_id,osm_type,tags,ST_PointOnSurface(geom) geom
+FROM postpass_pointlinepolygon
+WHERE geom && ST_MakeEnvelope(${minLon.toFixed(7)},${minLat.toFixed(7)},${maxLon.toFixed(7)},${maxLat.toFixed(7)},4326)
+  AND (
+    tags->>'building' IS NOT NULL
+    OR tags->>'landuse' IN ('residential','industrial','commercial','retail')
+    OR tags->>'amenity' IS NOT NULL
+    OR tags->>'shop' IS NOT NULL
+    OR tags->>'office' IS NOT NULL
+    OR tags->>'industrial' IS NOT NULL
+    OR tags->>'public_transport' IS NOT NULL
+    OR tags->>'railway' IN ('station','halt','tram_stop')
+    OR tags->>'aeroway' IN ('aerodrome','terminal')
+  )
+LIMIT ${URBAN_CONTEXT_LIMIT}`}
+function urbanRows(d:any){
+ const out:any[]=[];
+ for(const f of Array.isArray(d?.features)?d.features:[]){
+  const p=f?.properties??{},ctr=geoCenter(f);if(!ctr)continue;
+  out.push({source_id:String(p.osm_type??"")+":"+String(p.osm_id??""),latitude:ctr[0],longitude:ctr[1],tags:p.tags??{}});
+ }
+ return out;
+}
+function representativeCenter(plan:SpatialPlan){
+ if(plan.center)return{lat:Number(plan.center.lat),lon:Number(plan.center.lon),method:"query_center"};
+ const pts=Array.isArray(plan.input_vertices)?plan.input_vertices.filter((p:any,i:number,a:any[])=>i<a.length-1||Number(p?.[0])!==Number(a[0]?.[0])||Number(p?.[1])!==Number(a[0]?.[1])):[];
+ if(!pts.length)return null;
+ return{lat:pts.reduce((z:any,p:any)=>z+Number(p?.[1]??0),0)/pts.length,lon:pts.reduce((z:any,p:any)=>z+Number(p?.[0]??0),0)/pts.length,method:"mean_input_vertices"};
+}
+function urbanContextSummary(rows:any[],plan:SpatialPlan,truncated:boolean,areaKm2:number|null){
+ const xs=applySpatialPlanAll(rows,plan),c:any={total:xs.length,buildings:0,residential_landuse:0,industrial_landuse:0,commercial_landuse:0,retail_landuse:0,amenities:0,shops:0,offices:0,transport:0,industrial_objects:0,area_km2:areaKm2,truncated};
+ for(const x of xs){const t=x?.tags??{},land=String(t.landuse??"");
+  if(t.building&&String(t.building)!=="no")c.buildings++;
+  if(land==="residential")c.residential_landuse++;
+  if(land==="industrial")c.industrial_landuse++;
+  if(land==="commercial")c.commercial_landuse++;
+  if(land==="retail")c.retail_landuse++;
+  if(t.amenity)c.amenities++;if(t.shop)c.shops++;if(t.office)c.offices++;
+  if(t.public_transport||["station","halt","tram_stop"].includes(String(t.railway??""))||["aerodrome","terminal"].includes(String(t.aeroway??"")))c.transport++;
+  if(t.industrial||land==="industrial"||["works","wastewater_plant"].includes(String(t.man_made??"")))c.industrial_objects++;
+ }
+ return c;
+}
+async function ghslUrbanProbe(sb:any,center:{lat:number;lon:number}|null){
+ if(!center)return{metrics:null,status:"unavailable",cached:false,error:"representative center unavailable"};
+ const cacheKey=URBAN_PROFILE+":"+center.lat.toFixed(3)+":"+center.lon.toFixed(3);
+ try{
+  const {data,error}=await sb.from("urban_exposure_ghsl_cache").select("ghsl,updated_at").eq("cache_key",cacheKey).maybeSingle();
+  if(!error&&data?.ghsl&&Date.now()-new Date(data.updated_at).getTime()<URBAN_GHSL_CACHE_MS)return{metrics:data.ghsl,status:"active",cached:true,error:null};
+ }catch{}
+ const base=Deno.env.get("SUPABASE_URL"),key=Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");if(!base||!key)return{metrics:null,status:"unavailable",cached:false,error:"missing Supabase env"};
+ try{
+  const r=await fetch(base+"/functions/v1/firewatch-ghsl",{method:"POST",headers:{"content-type":"application/json","authorization":"Bearer "+key},body:JSON.stringify({mode:"probe",lat:center.lat,lon:center.lon}),signal:AbortSignal.timeout(45000)});
+  const txt=await r.text();let d:any={};try{d=JSON.parse(txt)}catch{}if(!r.ok||!d?.ok||!d?.metrics)throw new Error("GHSL probe HTTP "+r.status+": "+String(d?.error??txt).slice(0,180));
+  const metrics={...d.metrics,epoch:2025,resolution:"30 arcsec (~1 km)",profile:d.profile??null};
+  await sb.from("urban_exposure_ghsl_cache").upsert({cache_key:cacheKey,query_latitude:center.lat,query_longitude:center.lon,profile_version:URBAN_PROFILE,ghsl:metrics,updated_at:new Date().toISOString()});
+  return{metrics,status:"active",cached:false,error:null};
+ }catch(e){return{metrics:null,status:"unavailable",cached:false,error:errText(e)}}
+}
 function settlementCandidates(d:any,geom:any){
  const out:SettlementCandidate[]=[];
  for(const f of Array.isArray(d?.features)?d.features:[]){
@@ -208,9 +272,20 @@ async function spatialSearch(sb:any,body:any){
  if(needWikidata){try{wd=await wikidataByQids(ukraineRows)}catch(e){errors.push("Wikidata: "+errText(e))}}
  const resolved=resolve([...ukraineRows,...wd],spec),enriched=enrichSettlements(resolved,settlements),postFiltered=applyObjectFilters(enriched.objects,filters),spatialAll=applySpatialPlanAll(postFiltered,plan),spatialFiltered=applySpatialPlan(postFiltered,plan),objects=spatialFiltered.slice(0,OUTPUT_LIMIT),truncated=osmTruncated||spatialFiltered.length>OUTPUT_LIMIT;
  const analytics=analyzeSpatial(spatialAll.slice(0,12000),plan);
+ let urbanExposure:any=null,urbanStatus="skipped";
+ if(body.urban_exposure!==false){
+  const center=representativeCenter(plan),urbanMap=new Map<string,any>(),urbanSettled=await Promise.allSettled(plan.query_bboxes.map(b=>postpass(postpassUrbanSql(b))));
+  let urbanOk=0,urbanTruncated=false;
+  for(const q of urbanSettled){if(q.status==="rejected"){errors.push("Urban OSM context: "+errText(q.reason));continue}urbanOk++;const raw=urbanRows(q.value);if(raw.length>=URBAN_CONTEXT_LIMIT)urbanTruncated=true;for(const x of raw)if(!urbanMap.has(x.source_id))urbanMap.set(x.source_id,x)}
+  let gatedUrban:any[]=[];try{gatedUrban=(await gateObjectRows(sb,[...urbanMap.values()])).rows}catch(e){errors.push("Urban OSM gate: "+errText(e))}
+  const gh=await ghslUrbanProbe(sb,center),ctx=urbanContextSummary(gatedUrban,plan,urbanTruncated,Number(analytics.study_area_km2??0)||null);
+  urbanExposure=buildUrbanExposure(gh.metrics,ctx,{center:center?{latitude:center.lat,longitude:center.lon}:null,center_method:center?.method??null});
+  urbanExposure.ghsl_cached=gh.cached;urbanExposure.ghsl_error=gh.error;urbanExposure.osm_queries_total=urbanSettled.length;urbanExposure.osm_queries_ok=urbanOk;
+  urbanStatus=(gh.metrics||ctx.total>0)?((urbanOk===urbanSettled.length&&!urbanTruncated&&gh.metrics)?"active":"partial"):"unavailable";
+ }
  const byCategory:any={};for(const x of objects)for(const k of Array.isArray(x.category_keys)?x.category_keys:[])byCategory[k]=(byCategory[k]??0)+1;
- const status=osmStatus!=="active"||settlementStatus==="error"||truncated?"degraded":"active",summary={resolved_objects:objects.length,base_resolved_objects:resolved.length,filtered_out:Math.max(0,resolved.length-objects.length),multi_source:objects.filter((x:any)=>x.source_count>1).length,osm_objects:ukraineRows.length,wikidata_objects:wd.length,truncated,cache_ttl_hours:0,resolution,filters,category_count:specs.length,by_category:byCategory,addressing:enriched.summary,spatial:ssum,analytics};
- const source_status={osm_postpass:osmStatus,osm_queries_total:jobs.length,osm_queries_ok:osmOk,settlement_enrichment:settlementStatus,settlement_candidates:settlements.length,wikidata:needWikidata?(wd.length?"active":"not_applicable"):"skipped_count_only",overture:"not_applicable",overture_reason:"stage43_2_spatial_osm_primary"};
+ const status=osmStatus!=="active"||settlementStatus==="error"||truncated?"degraded":"active",summary={resolved_objects:objects.length,base_resolved_objects:resolved.length,filtered_out:Math.max(0,resolved.length-objects.length),multi_source:objects.filter((x:any)=>x.source_count>1).length,osm_objects:ukraineRows.length,wikidata_objects:wd.length,truncated,cache_ttl_hours:0,resolution,filters,category_count:specs.length,by_category:byCategory,addressing:enriched.summary,spatial:ssum,analytics,urban_exposure:urbanExposure};
+ const source_status={osm_postpass:osmStatus,osm_queries_total:jobs.length,osm_queries_ok:osmOk,settlement_enrichment:settlementStatus,settlement_candidates:settlements.length,wikidata:needWikidata?(wd.length?"active":"not_applicable"):"skipped_count_only",urban_exposure:urbanStatus,overture:"not_applicable",overture_reason:"stage43_2_spatial_osm_primary"};
  const involvedGate={points:[...(Array.isArray(inputGate?.points)?inputGate.points:[]),...(Array.isArray(gatedObjects.gate?.points)?gatedObjects.gate.points:[]),...(Array.isArray(placeGate?.points)?placeGate.points:[])]};const payload={ok:true,cached:false,status,category_key:spec.key,category_label:spec.label,resolution,spatial:ssum,oblasts:gateOblasts(involvedGate),source_status,summary,objects,errors,policy:"Spatial candidates are filtered by the requested geometry and exact Ukraine oblast polygons. Route corridors and radius searches are geometric approximations around the supplied line or point. Public-source completeness depends on OSM tagging and source availability."};
  const format=String(body.format??"").toLowerCase();
  if(format==="csv")return new Response("\uFEFF"+toCsv(objects),{headers:{"content-type":"text/csv; charset=utf-8","content-disposition":'attachment; filename="spatial-'+plan.mode+"-"+spec.key+'.csv"'}});
