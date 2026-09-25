@@ -1,7 +1,7 @@
 {
   "name": "FIRMSGeoTools",
   "version": "1.0.0",
-  "schema_version": 44,
+  "schema_version": 45,
   "channel": "stable",
   "profile": "core",
   "migrations": [
@@ -52,7 +52,8 @@
     "0041_stage43_2_2_neptun_time_correlation.sql",
     "0042_stage43_2_2_neptun_idempotent_resync.sql",
     "0043_stage43_4_urban_exposure.sql",
-    "0044_stage43_5_temporal_correlation.sql"
+    "0044_stage43_5_temporal_correlation.sql",
+    "0045_neptun_bot_statistics.sql"
   ],
   "edge_functions": [
     "eumetsat-frp-inspect",
