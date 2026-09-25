@@ -133,6 +133,10 @@ export function toGeoJson(objects:any[],meta:any={}){
     sources:(Array.isArray(x.sources)?x.sources:[]).map((s:any)=>({source:s.source,source_id:s.source_id,url:s.url??null})),
     resolution_status:x.resolution_status??null,
     resolution_confidence:Number(x.resolution_confidence??0),
+    distance_m:x.distance_m??null,
+    route_distance_m:x.route_distance_m??null,
+    route_along_m:x.route_along_m??null,
+    route_segment:x.route_segment??null,
     wikidata_qid:x.wikidata_qid??null
    }
   }))
