@@ -270,6 +270,20 @@ async function geoContext(sb:any,q:string){
   if(error)throw error;
   return data;
 }
+function geoNeedsRefresh(g:any){
+  if(!g||g.cache_available!==true||Number(g.feature_count??0)<=0||g.last_error)return true;
+  const t=Date.parse(String(g.queried_at??""));return !Number.isFinite(t)||(Date.now()-t)>24*3600000;
+}
+async function geoRefreshRequest(q:string){
+  const u=Deno.env.get("SUPABASE_URL"),k=Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
+  if(!u||!k)throw new Error("missing Supabase env");
+  const r=await fetch(u+"/functions/v1/firewatch-geo-osint",{
+    method:"POST",headers:{"content-type":"application/json","authorization":"Bearer "+k},
+    body:JSON.stringify({mode:"event",event_id:q}),signal:AbortSignal.timeout(35000)
+  });
+  const t=await r.text();let d:any;try{d=JSON.parse(t)}catch{throw new Error("Geo refresh invalid response")}
+  if(!r.ok||!d?.ok)throw new Error(String(d?.error??("HTTP "+r.status)));return d;
+}
 async function dossier(sb:any,q:string){
   const {data,error}=await sb.rpc("firewatch_dossier",{p_query:q})
     .abortSignal(AbortSignal.timeout(7000));
@@ -466,25 +480,46 @@ function analyticsText(a:any,hours:number){
   out.push("","Команды: /stats 24h|7d|30d • /analytics 24h|7d|30d");
   return out.join("\n").slice(0,3900);
 }
-function geoText(g:any){
-  if(!g)return "🗺 Гео/инфра\n\nСобытие не найдено или геоконтекст ещё не сформирован.";
+function geoText(g:any,area:any=null,refresh:any=null){
+  if(!g)return "🗺 Гео/инфра\n\nСобытие не найдено.";
   const infra=Array.isArray(g.infrastructure_features)?g.infrastructure_features:[];
   const features=Array.isArray(g.features)?g.features:[];
-  const near=features.filter((x:any)=>["settlement","forest","agriculture","water"].includes(String(x?.category))).slice(0,8);
+  const cats=g.categories??{},ac=area?.summary?.by_category??{},b=area?.buildings??{},an=area?.nearest??{};
+  const catNames:any={industrial:"промышленность",transport:"транспорт",power:"энергетика",oil_gas:"нефтегаз",storage:"резервуары/склады",warehouse:"склады",telecom:"телеком",water:"вода",forest:"лес",agriculture:"с/х земли",settlement:"нас. пункты",waste:"отходы",quarry:"карьеры",aerodrome:"аэродромы",residential:"жилые",commercial:"коммерция",education:"образование",healthcare:"медицина",government:"админ.",emergency:"экстренные службы",logistics:"логистика"};
+  const topCats=Object.entries(cats).filter(([,v])=>Number(v)>0).sort((a:any,b:any)=>Number(b[1])-Number(a[1])).slice(0,10);
+  const urbanOrder=["residential","commercial","education","healthcare","transport","industrial","energy","government","emergency","logistics","telecom","water"];
+  const urban=urbanOrder.filter(k=>Number(ac[k]??0)>0);
+  const cacheState=g.cache_available&&Number(g.feature_count??0)>0&&!g.last_error?"ready":refresh?.ok?"refreshed":"incomplete";
   const out=[
     "🗺 Гео/инфра #"+String(g.id??"").slice(0,8),
     "Регион: "+String(g.oblast??"—"),
     "Координаты: "+Number(g.latitude).toFixed(5)+", "+Number(g.longitude).toFixed(5),
-    "Радиус контекста: "+Math.round(Number(g.query_radius_m??5000)/1000)+" км","",
+    "Радиус геокэша: "+Math.round(Number(g.query_radius_m??10000)/1000)+" км • "+cacheState,
+    g.queried_at?"Обновлено: "+String(g.queried_at).slice(0,16).replace("T"," ")+" UTC":"",
+    "",
     "Ближайший объект: "+String(g.nearest_feature??"—")+
-      (g.nearest_feature_distance_m!=null?" • ~"+Math.round(Number(g.nearest_feature_distance_m))+" м":""),
-    "","Окружение:"
-  ];
-  if(near.length)near.forEach((x:any)=>out.push("• "+String(x.label??x.name??x.category)+" — ~"+Math.round(Number(x.distance_m??0))+" м"));
-  else out.push("• значимые объекты в выборке не найдены");
+      (g.nearest_feature_distance_m!=null?" • ~"+Math.round(Number(g.nearest_feature_distance_m))+" м":"")
+  ].filter(Boolean);
+  if(Number(g.feature_count??0)>0)out.push("OSM-объектов в профиле: "+Number(g.feature_count));
+  if(topCats.length)out.push("Категории 10 км: "+topCats.map(([k,v])=>(catNames[k]??k)+" "+Number(v)).join(" • "));
+  out.push("","Ближайшее окружение:");
+  if(features.length)features.slice(0,8).forEach((x:any)=>out.push("• ["+String(catNames[x.category]??x.label??x.category)+"] "+String(x.name??x.label??"—")+" — ~"+Math.round(Number(x.distance_m??0))+" м"));
+  else if(refresh?.error)out.push("• live-refresh не выполнен; данные кэша могут быть неполными");
+  else out.push("• геоконтекст ещё формируется");
+
   out.push("","Инфраструктура:");
   if(infra.length)infra.slice(0,8).forEach((x:any)=>out.push("• "+String(x.infra_label??x.label??x.name??x.infra_type??"инфраструктура")+" — ~"+Math.round(Number(x.distance_m??0))+" м"));
-  else out.push("• в текущем геокэше не обнаружена");
+  else if(refresh?.error)out.push("• live-refresh недоступен; отсутствие объектов не подтверждено");
+  else out.push("• специализированные infra-классы в текущей выборке не обнаружены");
+
+  if(area){
+    out.push("","Городской / объектный профиль · 5 км:");
+    if(b.status==="active")out.push("• building footprints: "+Number(b.building_count??0)+" • именованных "+Number(b.named_count??0)+" • non-residential tagged "+Number(b.nonresidential_tagged_count??0));
+    if(urban.length)out.push("• "+urban.map(k=>(catNames[k]??k)+" "+Number(ac[k]??0)).join(" • "));
+    const nearestUrban=urban.map(k=>({k,x:an[k]})).filter(z=>z.x).slice(0,5);
+    for(const z of nearestUrban)out.push("• ближайшая "+String(catNames[z.k]??z.k)+": "+String(z.x.name??"—")+" • ~"+Math.round(Number(z.x.distance_m??0))+" м");
+  }
+  if(refresh?.error)out.push("","⚠️ On-demand refresh: "+String(refresh.error).slice(0,220));
   out.push("","Картографический контекст является справочным и не устанавливает причину тепловой аномалии.");
   return out.join("\n").slice(0,3900);
 }
@@ -1222,9 +1257,14 @@ Deno.serve(async(req:Request)=>{
         await tg(token,"sendMessage",{chat_id:chatId,text:"Использование: /geo <ID события>",reply_markup:activeKeyboard});
         return json({ok:true,processed:1});
       }
-      const g=await geoContext(sb,q);
+      let g=await geoContext(sb,q),refresh:any=null,area:any=null;
+      const jobs:Promise<any>[]=[];
+      if(geoNeedsRefresh(g))jobs.push(geoRefreshRequest(q).then(x=>{refresh=x}).catch(e=>{refresh={error:e instanceof Error?e.message:String(e)}}));
+      jobs.push(areaIntelRequest({event_id:q,radius_m:5000}).then(x=>{area=x}).catch(e=>{console.error("client geo area enrichment failed:",e instanceof Error?e.message:String(e))}));
+      await Promise.allSettled(jobs);
+      if(refresh?.ok)g=await geoContext(sb,q);
       await countRequest(sb,userId);
-      await tg(token,"sendMessage",{chat_id:chatId,text:geoText(g),reply_markup:activeKeyboard});
+      await tg(token,"sendMessage",{chat_id:chatId,text:geoText(g,area,refresh),reply_markup:activeKeyboard});
       return json({ok:true,processed:1});
     }
 
