@@ -34,11 +34,11 @@ function bboxOf(cs:LngLat[]):[number,number,number,number]{
  for(const [lon,lat] of cs){minLon=Math.min(minLon,lon);minLat=Math.min(minLat,lat);maxLon=Math.max(maxLon,lon);maxLat=Math.max(maxLat,lat)}
  return[minLon,minLat,maxLon,maxLat];
 }
-function expandBbox(b:[number,number,number,number],m:number):[number,number,number,number]{
+export function expandBboxM(b:[number,number,number,number],m:number):[number,number,number,number]{
  const mid=(b[1]+b[3])/2,dy=m/111320,dx=m/(111320*Math.max(.2,Math.cos(mid*DEG)));
  return[b[0]-dx,b[1]-dy,b[2]+dx,b[3]+dy];
 }
-function circleBbox(lat:number,lon:number,r:number){return expandBbox([lon,lat,lon,lat],r)}
+function circleBbox(lat:number,lon:number,r:number){return expandBboxM([lon,lat,lon,lat],r)}
 function pointInRing(lon:number,lat:number,ring:any[]){
  let inside=false;
  for(let i=0,j=ring.length-1;i<ring.length;j=i++){
@@ -83,7 +83,7 @@ function routeWindows(route:LngLat[],corridor:number,maxChunkM=90000){
  const out:Array<[number,number,number,number]>=[];let chunk:LngLat[]=[route[0]],len=0;
  for(let i=1;i<route.length;i++){
   const d=haversineM(route[i-1][1],route[i-1][0],route[i][1],route[i][0]);
-  if(len+d>maxChunkM&&chunk.length>1){out.push(expandBbox(bboxOf(chunk),corridor));chunk=[route[i-1]];len=0}
+  if(len+d>maxChunkM&&chunk.length>1){out.push(expandBboxM(bboxOf(chunk),corridor);chunk=[route[i-1]];len=0}
   chunk.push(route[i]);len+=d;
  }
  if(chunk.length>1)out.push(expandBbox(bboxOf(chunk),corridor));
@@ -126,7 +126,7 @@ export function buildSpatialPlan(input:any):SpatialPlan{
   const route=lineCoords(s.geometry??s.route),corridor=finite(s.corridor_m??(finite(s.corridor_km)*1000)||2000);
   if(!Number.isFinite(corridor)||corridor<100||corridor>20000)throw new Error("corridor_m must be 100..20000");
   const len=routeLengthM(route);if(len>1000000)throw new Error("route length exceeds 1000 km");
-  const b=expandBbox(bboxOf(route),corridor),boxes=routeWindows(route,corridor);if(boxes.length>16)throw new Error("route requires too many query windows");
+  const b=expandBboxM(bboxOf(route),corridor),boxes=routeWindows(route,corridor);if(boxes.length>16)throw new Error("route requires too many query windows");
   return{mode,bbox:b,query_bboxes:boxes,route,corridor_m:corridor,route_length_m:len,input_vertices:route};
  }
  throw new Error("spatial mode must be radius, nearest, polygon or route");
