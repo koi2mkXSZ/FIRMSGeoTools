@@ -178,7 +178,8 @@ async function sendSatelliteVisual(sb:any,token:string,adminId:string,q?:string)
 async function dossierText(sb:any,q?:string){
   const {data,error}=await sb.rpc("firewatch_dossier",{p_query:q?.trim()||null})
     .abortSignal(AbortSignal.timeout(7000));if(error)throw error;if(!data)return"Досье: событие не найдено.";
-  const d:any=data,e=d.event??{},sat=d.satellite??{},surf=d.satellite_surface??{},atm=d.atmosphere??{},geo=d.geospatial??{},inf=d.infrastructure??{},ground=d.ground??{},ext=d.external_osint??{},pub=d.public_osint??{},air=d.air_threat_context??{},hist=d.history??{},pri=d.priority??{};
+  const d:any=data;const {data:tmpRow}=await sb.from("event_temporal_correlations").select("*").eq("fire_event_id",String(d.event?.id??"")).maybeSingle();d.temporal_correlation=tmpRow??null;
+  const e=d.event??{},sat=d.satellite??{},surf=d.satellite_surface??{},atm=d.atmosphere??{},geo=d.geospatial??{},inf=d.infrastructure??{},ground=d.ground??{},ext=d.external_osint??{},pub=d.public_osint??{},air=d.air_threat_context??{},hist=d.history??{},pri=d.priority??{},tmp=d.temporal_correlation??{};
   const flags:string[]=Array.isArray(d.context_flags)?d.context_flags:[],classes:string[]=Array.isArray(d.evidence_classes)?d.evidence_classes:[],infra:any[]=Array.isArray(inf.features)?inf.features:[];
   const duration=Number(e.duration_minutes??0),durationText=duration>=60?(duration/60).toFixed(1)+" ч":Math.round(duration)+" мин";
   const declared=Array.isArray(sat.declared_sources)?sat.declared_sources.join(", "):"—";
@@ -229,6 +230,7 @@ async function dossierText(sb:any,q?:string){
     const head=Number.isFinite(Number(x.heading_deg))?` • курс ${Math.round(Number(x.heading_deg))}°`:"";
     lines.push(`• ${x.label??x.type??"air threat"} • ${dist} • ${when}${head}${conf}`);
   }
+  if(tmp.profile_version)lines.push("",`⏱ Temporal Correlation: ${tmp.consistency_level??"unknown"} • ${tmp.consistency_score==null?"—":Math.round(Number(tmp.consistency_score))+"/100"} • coverage ${Math.round(Number(tmp.coverage_score??0))}%`,`Источников: ${tmp.source_count??0} • семейств: ${tmp.family_count??0}`,`Времена source/observation/publication не смешиваются; близость по времени не устанавливает причинность.`);
   lines.push("",`🕓 История: 30д ${hist.events_30d??0} • 90д ${hist.events_90d??0} • 365д ${hist.events_365d??0} • класс ${hist.hotspot_class??"—"}`);
   lines.push("",`Классы доказательств: ${classes.length?classes.join(", "):"—"}`);
   if(flags.length){lines.push("Контекст-флаги:",...flags.slice(0,12).map(x=>"• "+(DOSSIER_FLAG_LABELS[x]??x)))}
