@@ -27,9 +27,9 @@ Deno.serve(async(req:Request)=>{
   const eventId=String(body.event_id??"").trim();
 
   try{
-    let q=sb.from("fire_events").select("id,first_seen,last_seen,created_at,cams_observed_at,s5p_co_observed_at,s5p_aer_observed_at,atmosphere_signal_level,priority_score");
+    let q=sb.from("fire_events").select("id,first_seen,last_seen,created_at,cams_observed_at,s5p_co_observed_at,s5p_aer_observed_at,atmosphere_signal_level,priority_score,temporal_correlation_updated_at");
     if(eventId)q=q.eq("id",eventId);
-    else q=q.gte("first_seen",new Date(Date.now()-hours*3600_000).toISOString()).order("priority_score",{ascending:false,nullsFirst:false}).order("first_seen",{ascending:false}).limit(limit);
+    else q=q.gte("first_seen",new Date(Date.now()-hours*3600_000).toISOString()).order("temporal_correlation_updated_at",{ascending:true,nullsFirst:true}).order("priority_score",{ascending:false,nullsFirst:false}).order("first_seen",{ascending:false}).limit(limit);
     const {data:events,error:ee}=await q;if(ee)throw ee;
     const ids=(events??[]).map((x:any)=>x.id);
     if(!ids.length)return json({ok:true,profile:PROFILE,processed:0,changed:0});
