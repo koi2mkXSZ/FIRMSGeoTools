@@ -237,17 +237,41 @@ async function dossierText(sb:any,q?:string){
   return lines.join("\n").slice(0,3900);
 }
 function infraProfileText(x:any){const p=x?.profile??{},parts:string[]=[];const add=(label:string,v:any)=>{if(v!=null&&String(v)!=="")parts.push(label+" "+String(v).slice(0,80))};if(p.voltage){const v=Number(String(p.voltage).split(";")[0]);add("U:",Number.isFinite(v)?(v>=1000?(v/1000).toFixed(v%1000?1:0)+" кВ":v+" В"):p.voltage)}add("цепей:",p.circuits);add("f:",p.frequency);add("мощн.:",p.output);add("источник:",p.source);add("вещество:",p.substance);add("usage:",p.usage);add("Ø:",p.diameter);add("P:",p.pressure);add("оператор:",p.operator);add("ref:",p.ref);return parts.join(" • ")}
+function geoNeedsRefresh(g:any){
+  if(!g||g.cache_available!==true||Number(g.feature_count??0)<=0||g.last_error)return true;
+  const t=Date.parse(String(g.queried_at??""));return !Number.isFinite(t)||(Date.now()-t)>24*3600000;
+}
+async function geoRefreshRequest(q:string){
+  const u=Deno.env.get("SUPABASE_URL"),k=Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
+  if(!u||!k)throw new Error("missing Supabase env");
+  const r=await fetch(u+"/functions/v1/firewatch-geo-osint",{
+    method:"POST",headers:{"content-type":"application/json","authorization":"Bearer "+k},
+    body:JSON.stringify({mode:"event",event_id:q}),signal:AbortSignal.timeout(35000)
+  });
+  const t=await r.text();let d:any;try{d=JSON.parse(t)}catch{throw new Error("Geo refresh invalid response")}
+  if(!r.ok||!d?.ok)throw new Error(String(d?.error??("HTTP "+r.status)));return d;
+}
 async function geoText(sb:any,q?:string){
-  const [{data,error},{data:stRow},{data:ghRow}]=await Promise.all([
-    sb.rpc("firewatch_geo_context",{p_query:q?.trim()||null}),
+  const query=q?.trim()||null;
+  const [{data:initial,error},{data:stRow},{data:ghRow}]=await Promise.all([
+    sb.rpc("firewatch_geo_context",{p_query:query}),
     sb.from("system_state").select("value").eq("key","monitor_geo_osint").maybeSingle(),
     sb.from("system_state").select("value").eq("key","monitor_ghsl").maybeSingle()
   ]);
   if(error)throw error;
   const st=stRow?.value??{},ghst=ghRow?.value??{};
-  if(!data)return"Геоконтекст: событие не найдено.";
-  const e:any=data,rows:any[]=Array.isArray(e.features)?e.features:[],infra:any[]=Array.isArray(e.infrastructure_features)?e.infrastructure_features:[],cats=e.categories??{},infraCounts=e.infrastructure_counts??{},rings=e.infrastructure_rings??{},flags:any[]=Array.isArray(e.infrastructure_context_flags)?e.infrastructure_context_flags:[],gh=e.ghsl??null;
-  const catText=Object.entries(cats).sort((a:any,b:any)=>Number(b[1])-Number(a[1])).slice(0,8).map(([k,v])=>`${k}: ${v}`).join(" • ");
+  if(!initial)return"Геоконтекст: событие не найдено.";
+  let e:any=initial,refresh:any=null,area:any=null;
+  const eventQ=query||String(e.id);
+  const jobs:Promise<any>[]=[];
+  if(geoNeedsRefresh(e))jobs.push(geoRefreshRequest(eventQ).then(x=>{refresh=x}).catch(err=>{refresh={error:err instanceof Error?err.message:String(err)}}));
+  jobs.push(areaIntelRequest({event_id:eventQ,radius_m:5000}).then(x=>{area=x}).catch(err=>{console.error("admin geo area enrichment failed:",err instanceof Error?err.message:String(err))}));
+  await Promise.allSettled(jobs);
+  if(refresh?.ok){
+    const {data,error:re}=await sb.rpc("firewatch_geo_context",{p_query:eventQ});if(re)throw re;if(data)e=data;
+  }
+  const rows:any[]=Array.isArray(e.features)?e.features:[],infra:any[]=Array.isArray(e.infrastructure_features)?e.infrastructure_features:[],cats=e.categories??{},infraCounts=e.infrastructure_counts??{},rings=e.infrastructure_rings??{},flags:any[]=Array.isArray(e.infrastructure_context_flags)?e.infrastructure_context_flags:[],gh=e.ghsl??null;
+  const catText=Object.entries(cats).sort((a:any,b:any)=>Number(b[1])-Number(a[1])).slice(0,10).map(([k,v])=>`${k}: ${v}`).join(" • ");
   const infraNames=new Map(infra.map((x:any)=>[String(x.infra_type),String(x.infra_label??x.infra_type)]));
   const infraCountText=Object.entries(infraCounts).sort((a:any,b:any)=>Number(b[1])-Number(a[1])).slice(0,8).map(([k,v])=>`${infraNames.get(String(k))??k}: ${v}`).join(" • ");
   const ringText=[500,1000,2000,5000,10000].map(r=>`${r<1000?r+"м":r/1000+"км"} ${Number(rings?.[String(r)]?.total??0)}`).join(" • ");
@@ -263,14 +287,15 @@ async function geoText(sb:any,q?:string){
     `Координаты: ${Number(e.latitude).toFixed(5)}, ${Number(e.longitude).toFixed(5)}`,
     `Geo worker: ${st.status??"—"} • ${ageText(st.last_check)}`,
     `GHSL: ${ghst.status??"—"} • ${ageText(ghst.last_check)}`,
-    `Кэш OSM: ${e.cache_available?"✅ есть":"—"} • радиус ${Math.round(Number(e.query_radius_m??10000)/1000)} км • ${e.queried_at?ageText(e.queried_at):"нет снимка"}`,
+    `Кэш OSM: ${e.cache_available&&Number(e.feature_count??0)>0?"✅ ready":refresh?.ok?"✅ refreshed":"⚠️ incomplete"} • радиус ${Math.round(Number(e.query_radius_m??10000)/1000)} км • ${e.queried_at?ageText(e.queried_at):"нет снимка"}`,
     e.endpoint?`Источник OSM: ${String(e.endpoint).replace("https://","")} • ${e.endpoint_method??"—"}`:null,
     `OSM-объектов: ${e.feature_count??0} • общий контекст: ${e.context_type??"не определён"}`,
     e.nearest_feature?`Ближайший объект: ${e.nearest_feature} • ${Math.round(Number(e.nearest_feature_distance_m??0))} м`:null,
     e.infra_profile_version?`Инфраструктура: ${e.infra_profile_version}`:null,
     infraCountText?`Инфра-классы: ${infraCountText}`:null,
     ringText?`Инфра по радиусам: ${ringText}`:null
-  ].filter(Boolean);
+  ].filter(Boolean) as string[];
+  if(refresh?.error)head.push(`On-demand refresh: ⚠️ ${String(refresh.error).slice(0,260)}`);
   if(flags.length)head.push(`Контекст-флаги: ${flags.map((x:any)=>flagMap[String(x)]??String(x)).join(" • ")}`);
   if(gh){
     const n=(x:any)=>Number.isFinite(Number(x))?Math.round(Number(x)).toLocaleString("ru-RU"):"—";
@@ -278,9 +303,18 @@ async function geoText(sb:any,q?:string){
     head.push("","👥 GHSL — население и застройка:",`Эпоха: ${gh.epoch??2025} • ${gh.resolution??"~1 км"}`,`Население ≈ 1 км: ${n(gh.population_1km)} • 5 км: ${n(gh.population_5km)} • 10 км: ${n(gh.population_10km)}`,`Застройка ≈ 1 км: ${p(gh.built_fraction_1km_pct)} • 5 км: ${p(gh.built_fraction_5km_pct)} • 10 км: ${p(gh.built_fraction_10km_pct)}`,`Ячейка события: население ~${n(gh.population_cell)} • built-up ${n(gh.built_surface_cell_m2)} м²`);
     if(gh.last_error)head.push(`GHSL ошибка: ${String(gh.last_error).slice(0,300)}`);
   }
+  if(area){
+    const ac=area?.summary?.by_category??{},b=area?.buildings??{};
+    const labels:any={energy:"энергетика",industrial:"промышленность",government:"админ.",emergency:"экстренные",healthcare:"медицина",education:"образование",transport:"транспорт",logistics:"логистика",water:"вода",telecom:"телеком",commercial:"коммерция",residential:"жилые",storage:"хранение"};
+    const order=["residential","commercial","education","healthcare","transport","industrial","energy","government","emergency","logistics","telecom","water","storage"];
+    const parts=order.filter(k=>Number(ac[k]??0)>0).map(k=>(labels[k]??k)+" "+Number(ac[k]));
+    head.push("","🏙 Городской / объектный профиль · 5 км:");
+    if(b.status==="active")head.push(`Building footprints: ${Number(b.building_count??0)} • именованных ${Number(b.named_count??0)} • non-residential tagged ${Number(b.nonresidential_tagged_count??0)}`);
+    if(parts.length)head.push(parts.join(" • "));
+  }
   if(e.last_error)head.push("",`Последняя ошибка OSM: ${String(e.last_error).slice(0,500)}`);
   head.push("","⚙️ Инфраструктурный профиль:");
-  if(!infra.length)head.push("В радиусе не найдено объектов инфраструктуры из текущей OpenInfraMap-совместимой таксономии.");
+  if(!infra.length)head.push(refresh?.error?"Live-refresh не выполнен; отсутствие инфраструктуры не подтверждено.":"Специализированные infra-классы в текущей выборке не обнаружены.");
   else{
     for(const [i,x] of infra.slice(0,10).entries()){
       const dist=Number(x.distance_m)<1000?Math.round(Number(x.distance_m))+" м":(Number(x.distance_m)/1000).toFixed(1)+" км",detail=infraProfileText(x);
@@ -290,10 +324,10 @@ async function geoText(sb:any,q?:string){
   const general=rows.filter((x:any)=>!x.infra_type);
   if(general.length){
     head.push("","🧭 Прочий геоконтекст:");
-    for(const [i,x] of general.slice(0,5).entries())head.push(`${i+1}. [${x.label??x.category}] ${x.name??"—"} • ${Number(x.distance_m)<1000?Math.round(Number(x.distance_m))+" м":(Number(x.distance_m)/1000).toFixed(1)+" км"}`);
-  }
+    for(const [i,x] of general.slice(0,8).entries())head.push(`${i+1}. [${x.label??x.category}] ${x.name??"—"} • ${Number(x.distance_m)<1000?Math.round(Number(x.distance_m))+" м":(Number(x.distance_m)/1000).toFixed(1)+" км"}`);
+  }else if(refresh?.error)head.push("","🧭 Прочий геоконтекст: live-refresh недоступен; данные могут быть неполными.");
   if(catText)head.push("",`Все категории: ${catText}`);
-  head.push("","ℹ️ GHSL: European Commission JRC, GHS-POP/GHS-BUILT-S. Инфраструктура: © OpenStreetMap contributors через Geofabrik Postpass, таксономия адаптирована по OpenInfraMap. Значения GHSL в радиусах приблизительные из-за разрешения ~1 км. Близость инфраструктуры не доказывает причинную связь.");
+  head.push("","ℹ️ GHSL: European Commission JRC, GHS-POP/GHS-BUILT-S. Инфраструктура/геоконтекст: © OpenStreetMap contributors через Geofabrik Postpass. Building footprints и Area Intel являются картографическим контекстом. Близость объектов не доказывает причинную связь.");
   return head.join("\n").slice(0,3900);
 }
 async function groundText(sb:any,q?:string){const [{data,error},{data:stRow}]=await Promise.all([sb.rpc("firewatch_ground_context",{p_query:q?.trim()||null}),sb.from("system_state").select("value").eq("key","monitor_ground_osint").maybeSingle()]);if(error)throw error;const st=stRow?.value??{};if(!data)return"Наземные датчики: событие не найдено.";const e:any=data,rows:any[]=Array.isArray(e.measurements)?e.measurements:[];const head=[`🌫 Ground OSINT #${String(e.id).slice(0,8)}`,`Область: ${e.oblast??"—"}`,`Координаты: ${Number(e.latitude).toFixed(5)}, ${Number(e.longitude).toFixed(5)}`,`Станций в контексте: ${e.station_count??0} • источников: ${e.source_count??0}`,`Worker: ${st.status??"—"} • проверка ${ageText(st.last_check)}`,`Sensor.Community: ${st.sensor_community?.error?"⚠️ ошибка":"✅ live"} • OpenAQ: ${st.openaq?.configured?"✅ configured":"🟡 нужен API key"} • SaveEcoBot allow-list: ${st.saveecobot?.registry_sources??0}`];if(!rows.length)head.push("","Подходящих наземных измерений в радиусе 25 км и окне ±12 ч не найдено.");else{head.push("");for(const [i,x] of rows.entries()){const dist=x.distance_km==null?"—":Number(x.distance_km).toFixed(1)+" км",dt=x.time_delta_h==null?"—":Number(x.time_delta_h).toFixed(1)+" ч",val=Number.isFinite(Number(x.value))?Number(x.value).toFixed(2):String(x.value??"—");head.push(`${i+1}. [${x.source}] ${x.station_name??x.station_id}\n   ${x.parameter}: ${val}${x.unit?" "+x.unit:""} • ${dist} • Δt ${dt}\n   ${String(x.observed_at??"").slice(0,16).replace("T"," ")} UTC${x.is_old?" • устаревшее":""}`)}}head.push("","ℹ️ Наземные измерения — независимый экологический контекст и не доказывают связь загрязнения с конкретной тепловой аномалией.");return head.join("\n").slice(0,3900)}
