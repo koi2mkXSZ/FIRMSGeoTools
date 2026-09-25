@@ -10,7 +10,9 @@ The profile combines:
 - JRC GHSL GHS-BUILT-S epoch 2025;
 - OpenStreetMap/Postpass building-footprint counts within 2 km;
 - OSM residential / industrial / commercial / retail landuse within 2 km;
-- OSM amenity, shop, office and transport activity indicators.
+- OSM amenity, shop, office and transport activity indicators;
+- explicit local counters for residential/commercial/industrial buildings, schools, hospitals/clinics, fuel stations, energy objects and transport;
+- forest/wood and agricultural land-use indicators.
 
 ## Output
 
@@ -24,7 +26,9 @@ Classes:
 - `urban`
 - `suburban`
 - `industrial`
-- `mixed_urban_industrial`
+- `forest`
+- `agricultural`
+- `mixed`
 - `rural`
 - `unknown`
 
@@ -53,3 +57,14 @@ Public roles have no access. The Edge Function accesses it with server-side serv
 ## Safety / interpretation
 
 The Urban Exposure Profile is contextual cartography. It is not a count of persons currently present, building occupancy, damage, casualties, or physical completeness of the territory.
+
+## Latency guard
+
+Urban enrichment is non-critical to the base spatial search.
+
+- GHSL and OSM urban probes are started in parallel.
+- Each Urban Exposure Postpass query has a 6 s hard timeout.
+- On timeout or source failure the response remains valid and returns a degraded/partial exposure profile from the remaining evidence.
+- Urban source degradation does not convert a successful core object search into a hard failure.
+
+This is intentional production hardening after a dense-city acceptance probe showed that downloading generic building geometries could keep the function occupied for too long.
