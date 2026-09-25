@@ -15,7 +15,8 @@ const RAW_LIMIT=7000;
 const OUTPUT_LIMIT=5000;
 const SETTLEMENT_LIMIT=20000;
 const CACHE_VERSION="r43_1_3";
-const URBAN_CONTEXT_LIMIT=8000;
+const URBAN_CONTEXT_LIMIT=1800;
+const URBAN_CONTEXT_RADIUS_M=2000;
 const URBAN_PROFILE="urban-exposure-v1";
 const URBAN_GHSL_CACHE_MS=30*24*3600_000;
 
@@ -44,22 +45,50 @@ WHERE geom && ST_MakeEnvelope(${minLon.toFixed(7)},${minLat.toFixed(7)},${maxLon
   AND tags->>'place' IN ('city','town','village','hamlet')
   AND coalesce(tags->>'name:uk',tags->>'name:ru',tags->>'name',tags->>'name:en') IS NOT NULL
 LIMIT ${SETTLEMENT_LIMIT}`}
-function postpassUrbanSql(b:number[]){const [minLon,minLat,maxLon,maxLat]=b.map(Number);return `
-SELECT osm_id,osm_type,tags,ST_PointOnSurface(geom) geom
-FROM postpass_pointlinepolygon
-WHERE geom && ST_MakeEnvelope(${minLon.toFixed(7)},${minLat.toFixed(7)},${maxLon.toFixed(7)},${maxLat.toFixed(7)},4326)
-  AND (
-    tags->>'building' IS NOT NULL
-    OR tags->>'landuse' IN ('residential','industrial','commercial','retail')
-    OR tags->>'amenity' IS NOT NULL
-    OR tags->>'shop' IS NOT NULL
-    OR tags->>'office' IS NOT NULL
-    OR tags->>'industrial' IS NOT NULL
-    OR tags->>'public_transport' IS NOT NULL
-    OR tags->>'railway' IN ('station','halt','tram_stop')
-    OR tags->>'aeroway' IN ('aerodrome','terminal')
-  )
-LIMIT ${URBAN_CONTEXT_LIMIT}`}
+function postpassUrbanSql(lat:number,lon:number,r=URBAN_CONTEXT_RADIUS_M){
+ const dLat=r/111320,dLon=r/(111320*Math.max(.25,Math.cos(lat*Math.PI/180)));
+ const minLon=(lon-dLon).toFixed(6),maxLon=(lon+dLon).toFixed(6),minLat=(lat-dLat).toFixed(6),maxLat=(lat+dLat).toFixed(6);
+ return `
+WITH p AS (SELECT ST_SetSRID(ST_MakePoint(${lon.toFixed(7)},${lat.toFixed(7)}),4326) center_geom),
+q AS (
+ SELECT osm_id,osm_type,tags,ST_ClosestPoint(geom,p.center_geom) geom,
+        ST_Distance(geom::geography,p.center_geom::geography) distance_m
+ FROM postpass_pointlinepolygon,p
+ WHERE geom && ST_MakeEnvelope(${minLon},${minLat},${maxLon},${maxLat},4326)
+   AND (
+     tags->>'landuse' IN ('residential','industrial','commercial','retail')
+     OR tags->>'amenity' IS NOT NULL
+     OR tags->>'shop' IS NOT NULL
+     OR tags->>'office' IS NOT NULL
+     OR tags->>'industrial' IS NOT NULL
+     OR tags->>'man_made' IN ('works','wastewater_plant','water_works','pumping_station','storage_tank')
+     OR tags->>'public_transport' IS NOT NULL
+     OR tags->>'railway' IN ('station','halt','tram_stop','yard','terminal')
+     OR tags->>'aeroway' IN ('aerodrome','terminal','helipad')
+   )
+)
+SELECT osm_id,osm_type,tags,geom,distance_m FROM q
+WHERE distance_m<=${r}
+ORDER BY distance_m LIMIT ${URBAN_CONTEXT_LIMIT}`}
+function postpassUrbanBuildingSql(lat:number,lon:number,r=URBAN_CONTEXT_RADIUS_M){
+ const dLat=r/111320,dLon=r/(111320*Math.max(.25,Math.cos(lat*Math.PI/180)));
+ const minLon=(lon-dLon).toFixed(6),maxLon=(lon+dLon).toFixed(6),minLat=(lat-dLat).toFixed(6),maxLat=(lat+dLat).toFixed(6);
+ return `
+WITH p AS (SELECT ST_SetSRID(ST_MakePoint(${lon.toFixed(7)},${lat.toFixed(7)}),4326) center_geom),
+b AS (
+ SELECT tags,geom,ST_Distance(geom::geography,p.center_geom::geography) distance_m
+ FROM postpass_pointlinepolygon,p
+ WHERE geom && ST_MakeEnvelope(${minLon},${minLat},${maxLon},${maxLat},4326)
+   AND tags ? 'building'
+)
+SELECT count(*)::int building_count,
+       count(*) filter(where tags->>'building' in ('industrial','warehouse','commercial','retail','hospital','school','university','government','civic','public'))::int nonresidential_buildings,
+       ST_SetSRID(ST_MakePoint(${lon.toFixed(7)},${lat.toFixed(7)}),4326) geom
+FROM b WHERE distance_m<=${r}`}
+function urbanBuildingCounts(d:any){
+ const f=Array.isArray(d?.features)?d.features[0]:null,p=f?.properties??{};
+ return{building_count:Number(p.building_count??0),nonresidential_buildings:Number(p.nonresidential_buildings??0)};
+}
 function urbanRows(d:any){
  const out:any[]=[];
  for(const f of Array.isArray(d?.features)?d.features:[]){
@@ -74,10 +103,9 @@ function representativeCenter(plan:SpatialPlan){
  if(!pts.length)return null;
  return{lat:pts.reduce((z:any,p:any)=>z+Number(p?.[1]??0),0)/pts.length,lon:pts.reduce((z:any,p:any)=>z+Number(p?.[0]??0),0)/pts.length,method:"mean_input_vertices"};
 }
-function urbanContextSummary(rows:any[],plan:SpatialPlan,truncated:boolean,areaKm2:number|null){
- const xs=applySpatialPlanAll(rows,plan),c:any={total:xs.length,buildings:0,residential_landuse:0,industrial_landuse:0,commercial_landuse:0,retail_landuse:0,amenities:0,shops:0,offices:0,transport:0,industrial_objects:0,area_km2:areaKm2,truncated};
+function urbanContextSummary(rows:any[],buildings:any,truncated:boolean){
+ const xs=rows,c:any={total:xs.length,buildings:Number(buildings?.building_count??0),nonresidential_buildings:Number(buildings?.nonresidential_buildings??0),residential_landuse:0,industrial_landuse:0,commercial_landuse:0,retail_landuse:0,amenities:0,shops:0,offices:0,transport:0,industrial_objects:0,area_km2:Math.PI*URBAN_CONTEXT_RADIUS_M**2/1e6,radius_m:URBAN_CONTEXT_RADIUS_M,truncated};
  for(const x of xs){const t=x?.tags??{},land=String(t.landuse??"");
-  if(t.building&&String(t.building)!=="no")c.buildings++;
   if(land==="residential")c.residential_landuse++;
   if(land==="industrial")c.industrial_landuse++;
   if(land==="commercial")c.commercial_landuse++;
@@ -274,14 +302,18 @@ async function spatialSearch(sb:any,body:any){
  const analytics=analyzeSpatial(spatialAll.slice(0,12000),plan);
  let urbanExposure:any=null,urbanStatus="skipped";
  if(body.urban_exposure!==false){
-  const center=representativeCenter(plan),urbanMap=new Map<string,any>(),urbanSettled=await Promise.allSettled(plan.query_bboxes.map(b=>postpass(postpassUrbanSql(b))));
-  let urbanOk=0,urbanTruncated=false;
-  for(const q of urbanSettled){if(q.status==="rejected"){errors.push("Urban OSM context: "+errText(q.reason));continue}urbanOk++;const raw=urbanRows(q.value);if(raw.length>=URBAN_CONTEXT_LIMIT)urbanTruncated=true;for(const x of raw)if(!urbanMap.has(x.source_id))urbanMap.set(x.source_id,x)}
-  let gatedUrban:any[]=[];try{gatedUrban=(await gateObjectRows(sb,[...urbanMap.values()])).rows}catch(e){errors.push("Urban OSM gate: "+errText(e))}
-  const gh=await ghslUrbanProbe(sb,center),ctx=urbanContextSummary(gatedUrban,plan,urbanTruncated,Number(analytics.study_area_km2??0)||null);
+  const center=representativeCenter(plan);
+  let urbanRowsLocal:any[]=[],buildings={building_count:0,nonresidential_buildings:0},urbanTruncated=false,urbanOk=0,urbanTotal=0;
+  if(center){
+   const urbanJobs=await Promise.allSettled([postpass(postpassUrbanSql(center.lat,center.lon)),postpass(postpassUrbanBuildingSql(center.lat,center.lon))]);urbanTotal=urbanJobs.length;
+   const ctxJob=urbanJobs[0],buildingJob=urbanJobs[1];
+   if(ctxJob.status==="fulfilled"){urbanOk++;urbanRowsLocal=urbanRows(ctxJob.value);urbanTruncated=urbanRowsLocal.length>=URBAN_CONTEXT_LIMIT}else errors.push("Urban OSM context: "+errText(ctxJob.reason));
+   if(buildingJob.status==="fulfilled"){urbanOk++;buildings=urbanBuildingCounts(buildingJob.value)}else errors.push("Urban OSM buildings: "+errText(buildingJob.reason));
+  }
+  const gh=await ghslUrbanProbe(sb,center),ctx=urbanContextSummary(urbanRowsLocal,buildings,urbanTruncated);
   urbanExposure=buildUrbanExposure(gh.metrics,ctx,{center:center?{latitude:center.lat,longitude:center.lon}:null,center_method:center?.method??null});
-  urbanExposure.ghsl_cached=gh.cached;urbanExposure.ghsl_error=gh.error;urbanExposure.osm_queries_total=urbanSettled.length;urbanExposure.osm_queries_ok=urbanOk;
-  urbanStatus=(gh.metrics||ctx.total>0)?((urbanOk===urbanSettled.length&&!urbanTruncated&&gh.metrics)?"active":"partial"):"unavailable";
+  urbanExposure.context_radius_m=URBAN_CONTEXT_RADIUS_M;urbanExposure.ghsl_cached=gh.cached;urbanExposure.ghsl_error=gh.error;urbanExposure.osm_queries_total=urbanTotal;urbanExposure.osm_queries_ok=urbanOk;
+  urbanStatus=(gh.metrics||ctx.total>0||ctx.buildings>0)?((urbanOk===urbanTotal&&!urbanTruncated&&gh.metrics)?"active":"partial"):"unavailable";
  }
  const byCategory:any={};for(const x of objects)for(const k of Array.isArray(x.category_keys)?x.category_keys:[])byCategory[k]=(byCategory[k]??0)+1;
  const status=osmStatus!=="active"||settlementStatus==="error"||truncated?"degraded":"active",summary={resolved_objects:objects.length,base_resolved_objects:resolved.length,filtered_out:Math.max(0,resolved.length-objects.length),multi_source:objects.filter((x:any)=>x.source_count>1).length,osm_objects:ukraineRows.length,wikidata_objects:wd.length,truncated,cache_ttl_hours:0,resolution,filters,category_count:specs.length,by_category:byCategory,addressing:enriched.summary,spatial:ssum,analytics,urban_exposure:urbanExposure};
