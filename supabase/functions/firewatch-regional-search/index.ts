@@ -164,7 +164,7 @@ async function spatialSearch(sb:any,body:any){
  if(["settlement","city","town"].includes(requestedMode)){
   const name=String(spatialInput.name??spatialInput.settlement??spatialInput.city??"").trim();if(!name)throw new Error("settlement name required");
   const places=spatialSettlementCandidates(await postpass(postpassPlaceSql(name)),masks),target=resolveSettlementTarget(places,name);if(!target)throw new Error("settlement not found in Ukraine");
-  const radius=Number(spatialInput.radius_m??(Number(spatialInput.radius_km)*1000)||target.radius_m);
+  const radiusKm=Number(spatialInput.radius_km),radius=Number(spatialInput.radius_m??(Number.isFinite(radiusKm)?radiusKm*1000:target.radius_m));
   plan=buildSpatialPlan({mode:"radius",lat:target.latitude,lon:target.longitude,radius_m:radius});
   settlementTarget={name:target.name,place:target.place??null,latitude:target.latitude,longitude:target.longitude,source_id:target.source_id??null,name_score:target.name_score,default_radius_m:target.radius_m,applied_radius_m:radius};
  }else plan=buildSpatialPlan(spatialInput);
