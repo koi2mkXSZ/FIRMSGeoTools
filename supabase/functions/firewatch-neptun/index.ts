@@ -73,19 +73,7 @@ Deno.serve(async(req:Request)=>{
     };
   }).filter(Boolean) as any[];
 
-  const cutoff=new Date(started.getTime()-24*3600e3).toISOString();
-  const {data:events,error:ee}=await sb.from("fire_events")
-    .select("id,first_seen,last_seen,best_latitude,best_longitude,last_latitude,last_longitude")
-    .gte("first_seen",cutoff).order("first_seen",{ascending:false}).limit(300);
-  if(ee)return json({ok:false,error:ee.message},502);
-
-  const eventIds=(events??[]).map((e:any)=>e.id);
-  const {data:existing}=eventIds.length
-    ?await sb.from("event_air_threat_context").select("*").in("fire_event_id",eventIds)
-    :{data:[]} as any;
-  const existingMap=new Map((existing??[]).map((x:any)=>[`${x.fire_event_id}|${x.track_id}`,x]));
-
-  let historyInserted=0,matches=0,closestUpdated=0;
+  let historyInserted=0;
   const refreshedIds:string[]=[];
   for(const m of normalized){
     const currentRow={...m,last_seen_at:startedIso,updated_at:startedIso};
@@ -101,37 +89,26 @@ Deno.serve(async(req:Request)=>{
       place:m.place,description:m.description,raw:m.raw
     },{onConflict:"snapshot_key",ignoreDuplicates:true});
     if(!he)historyInserted++; else warnings.push(`history ${m.track_id}: ${he.message}`);
-
-    const mt=Date.parse(m.source_time);
-    for(const e of events??[]){
-      const elat=num(e.best_latitude??e.last_latitude),elon=num(e.best_longitude??e.last_longitude);
-      if(elat==null||elon==null)continue;
-      const et=Date.parse(String(e.first_seen));
-      if(!Number.isFinite(mt)||!Number.isFinite(et))continue;
-      const offset=Math.round((mt-et)/1000);
-      if(Math.abs(offset)>MAX_TIME_OFFSET_S)continue;
-      const dist=havM(m.latitude,m.longitude,elat,elon);
-      if(dist>MAX_DISTANCE_M)continue;
-      matches++;
-      const key=`${e.id}|${m.track_id}`,old=existingMap.get(key);
-      if(old&&Number(old.nearest_distance_m)<=dist)continue;
-      const row={
-        fire_event_id:e.id,track_id:m.track_id,threat_type:m.threat_type,label:m.label,
-        nearest_distance_m:Math.round(dist),nearest_at:m.source_time,event_time_reference:e.first_seen,
-        time_offset_seconds:offset,heading_deg:m.heading_deg,group_count:m.group_count,
-        confidence_0_100:m.confidence_0_100,place:m.place,description:m.description,
-        source_name:"Neptun",source_url:"https://neptun.in.ua/",last_matched_at:startedIso,updated_at:startedIso
-      };
-      const {error:ue}=await sb.from("event_air_threat_context").upsert(row,{onConflict:"fire_event_id,track_id"});
-      if(ue)warnings.push(`match ${String(e.id).slice(0,8)}: ${ue.message}`);
-      else{closestUpdated++;existingMap.set(key,row)}
-    }
   }
 
   const {error:staleErr}=await sb.from("neptun_tracks_current").delete().lt("last_seen_at",startedIso);
   if(staleErr)warnings.push("stale cleanup: "+staleErr.message);
 
-  const affected=[...new Set((existingMap.size?[...existingMap.keys()].map(k=>k.split("|")[0]):[]))].slice(0,40);
+  let correlation:any={ok:false,error:"not_run"};
+  try{
+    const {data:cr,error:ce}=await sb.rpc("firewatch_rebuild_neptun_context",{p_hours:24})
+      .abortSignal(AbortSignal.timeout(20000));
+    if(ce)throw ce;correlation=cr??{ok:true};
+  }catch(e){
+    correlation={ok:false,error:e instanceof Error?e.message:String(e)};
+    warnings.push("correlation rebuild: "+correlation.error);
+  }
+
+  const {data:affectedRows}=await sb.from("event_air_threat_context")
+    .select("fire_event_id")
+    .gte("updated_at",startedIso)
+    .limit(300);
+  const affected=[...new Set((affectedRows??[]).map((x:any)=>String(x.fire_event_id)))].slice(0,40);
   for(let i=0;i<affected.length;i+=4){
     await Promise.allSettled(affected.slice(i,i+4).map((id:string)=>
       sb.rpc("firewatch_refresh_event_dossier",{p_event:id})
@@ -144,10 +121,12 @@ Deno.serve(async(req:Request)=>{
     consecutive_failures:0,last_error:null,
     markers_received:markers.length,tracks_active:normalized.length,
     ballistic_threat:Boolean(data?.ballistic_threat),history_snapshots_attempted:normalized.length,
-    proximity_candidates:matches,closest_context_updates:closestUpdated,
-    match_radius_km:MAX_DISTANCE_M/1000,time_window_hours:MAX_TIME_OFFSET_S/3600,
+    history_snapshots_inserted:historyInserted,
+    proximity_candidates:Number(correlation?.context_rows??0),closest_context_updates:Number(correlation?.event_count??0),
+    context_before_or_at_firms:Number(correlation?.before_or_at_firms??0),context_after_firms:Number(correlation?.after_firms??0),
+    match_radius_km:50,time_window_before_hours:6,time_window_after_minutes:30,correlation_mode:"historical_preferred",
     warnings:warnings.slice(-20),
-    policy:"Public Neptun air-threat tracks are contextual evidence only. Spatial/temporal proximity does not establish causation.",
+    policy:"Public Neptun air-threat tracks are contextual evidence only. Historical snapshots are matched around FIRMS acquisition time; pre-FIRMS context is preferred. Spatial/temporal proximity does not establish causation.",
     source:"https://neptun.in.ua/api/data"
   };
   await sb.from("system_state").upsert({key:"monitor_neptun",value:state,updated_at:startedIso});
