@@ -97,9 +97,12 @@ async function searchEvents(sb:any,filters:any){
   return data??{count:0,events:[]};
 }
 async function analytics(sb:any,hours:number){
-  const {data,error}=await sb.rpc("firewatch_analytics_summary",{p_hours:hours});
-  if(error)throw error;
-  return data??{};
+  const [{data,error},{data:neptun,error:ne}]=await Promise.all([
+    sb.rpc("firewatch_analytics_summary",{p_hours:hours}),
+    sb.rpc("firewatch_neptun_stats",{p_hours:hours})
+  ]);
+  if(error)throw error;if(ne)throw ne;
+  return {...(data??{}),neptun:neptun??{}};
 }
 async function deepOsint(sb:any,q:string){
   const {data,error}=await sb.rpc("firewatch_deep_osint",{p_query:q})
@@ -459,7 +462,7 @@ function searchText(d:any,title:string){
   return out.join("\n").slice(0,3900);
 }
 function statsText(a:any,hours:number){
-  const e=a?.events??{},f=a?.frp??{};
+  const e=a?.events??{},f=a?.frp??{},n=a?.neptun??{},t=n.types??{};
   const period=hours<48?hours+" ч":Math.round(hours/24)+" дн";
   return [
     "📊 Статистика • "+period,"",
@@ -470,20 +473,30 @@ function statsText(a:any,hours:number){
     "Детекций с FRP: "+Number(f.detections??0),
     "Средний FRP: "+(f.avg_mw==null?"—":Number(f.avg_mw).toFixed(2)+" МВт"),
     "Максимальный FRP: "+(f.max_mw==null?"—":Number(f.max_mw).toFixed(2)+" МВт"),"",
-    "Данные описывают спутниковые тепловые аномалии и не устанавливают причину события."
+    "✈️ Neptun:",
+    "Корреляций: "+Number(n.correlations??0)+" • FIRMS-событий: "+Number(n.events??0),
+    "Shahed: "+Number(t.shahed??0)+" • ракеты: "+Number(t.raketa??0)+" • развед.: "+Number(t.rozved??0)+(Number(t.other??0)?" • прочие: "+Number(t.other):""),
+    "По времени: до FIRMS "+Number(n.before_firms??0)+" • после "+Number(n.after_firms??0)+" • одновременно "+Number(n.simultaneous??0),
+    "Средний |Δt|: "+(n.avg_abs_offset_minutes==null?"—":Number(n.avg_abs_offset_minutes).toFixed(1)+" мин"),"",
+    "Neptun — пространственно-временной контекст; совпадение не устанавливает причину события."
   ].join("\n");
 }
 function analyticsText(a:any,hours:number){
   const period=hours<48?hours+" ч":Math.round(hours/24)+" дн";
   const oblasts=(Array.isArray(a?.by_oblast)?a.by_oblast:[]);
   const sources=(Array.isArray(a?.by_source)?a.by_source:[]);
+  const n=a?.neptun??{},t=n.types??{};
   const out=["📈 Аналитика • "+period,"","По всем регионам:"];
   if(oblasts.length)oblasts.forEach((x:any,i:number)=>out.push((i+1)+". "+String(x.oblast)+" — "+Number(x.events??0)));
   else out.push("Нет данных.");
   out.push("","По источникам:");
   if(sources.length)sources.forEach((x:any,i:number)=>out.push((i+1)+". "+String(x.source)+" — "+Number(x.detections??0)+" детекций"));
   else out.push("Нет данных.");
-  out.push("","Команды: /stats 24h|7d|30d • /analytics 24h|7d|30d");
+  out.push("","✈️ Neptun:",
+    "Корреляций: "+Number(n.correlations??0)+" • FIRMS-событий: "+Number(n.events??0),
+    "Shahed "+Number(t.shahed??0)+" • ракеты "+Number(t.raketa??0)+" • развед. "+Number(t.rozved??0),
+    "До FIRMS "+Number(n.before_firms??0)+" • после "+Number(n.after_firms??0)+" • средний |Δt| "+(n.avg_abs_offset_minutes==null?"—":Number(n.avg_abs_offset_minutes).toFixed(1)+" мин"),
+    "","Команды: /stats 24h|7d|30d • /analytics 24h|7d|30d");
   return out.join("\n").slice(0,3900);
 }
 function geoText(g:any,area:any=null,refresh:any=null){
