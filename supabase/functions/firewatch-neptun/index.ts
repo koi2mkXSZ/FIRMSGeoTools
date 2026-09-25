@@ -104,7 +104,7 @@ Deno.serve(async(req:Request)=>{
     warnings.push("correlation rebuild: "+correlation.error);
   }
 
-  const affected=[...new Set(
+  const affected:string[]=[...new Set<string>(
     (Array.isArray(correlation?.changed_event_ids)?correlation.changed_event_ids:[])
       .map((x:any)=>String(x))
   )].slice(0,80);
